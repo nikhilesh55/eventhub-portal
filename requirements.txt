@@ -1,0 +1,11 @@
+# EventHub: Event Booking & QR Check-In Portal
+# -------------------------------------------------------------
+# Zero External Dependencies!
+# EventHub is intentionally engineered using Python 3's built-in standard library
+# (http.server, sqlite3, json, hashlib, urllib, unittest).
+# No 'pip install' is strictly required to run or test the core application!
+#
+# Below are optional development and linting tools:
+flake8>=7.0.0
+pytest>=8.0.0
+pytest-cov>=4.1.0

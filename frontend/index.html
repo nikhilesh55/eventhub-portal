@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EventHub | Event Booking & QR Check-In Portal</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎟️</text></svg>">
+  
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50: '#eef2ff',
+              100: '#e0e7ff',
+              500: '#6366f1',
+              600: '#4f46e5',
+              700: '#4338ca',
+              800: '#3730a3',
+            }
+          }
+        }
+      }
+    }
+  </script>
+
+  <!-- Leaflet CSS for OpenStreetMap Interactive Map -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <!-- Local QR Code Engine -->
+  <script src="/js/qrcode.min.js"></script>
+
+  <!-- Custom Stylesheet -->
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body class="bg-slate-50 text-slate-900 min-h-screen flex flex-col">
+  <div id="root">
+    <!-- Instant Loading Placeholder -->
+    <div class="flex items-center justify-center min-h-screen">
+      <div class="text-center p-8 bg-white rounded-3xl shadow-xl border border-slate-200">
+        <div class="inline-block animate-spin rounded-full h-12 w-12 border-4 border-indigo-600 border-t-transparent mb-4"></div>
+        <h2 class="text-xl font-bold text-slate-800">Starting EventHub Portal...</h2>
+        <p class="text-sm text-slate-500 mt-1">Connecting to REST Services & Database</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Native JavaScript Application Logic (Ultra-fast, zero-build, zero-transpile) -->
+  <script src="/js/app.js"></script>
+</body>
+</html>

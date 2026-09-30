@@ -44,7 +44,11 @@ def main():
     print(f"      Database ready at: {DB_PATH}")
 
     # 2. Start REST & Web Server
-    port = find_free_port(8080)
+    port_env = os.environ.get("PORT")
+    if port_env:
+        port = int(port_env)
+    else:
+        port = find_free_port(8080)
     print(f"[2/2] Starting REST API & Web Server on port {port}...")
     print(f"\n🚀 EventHub is LIVE!")
     print(f"   • Local Web Portal  : http://127.0.0.1:{port}/")

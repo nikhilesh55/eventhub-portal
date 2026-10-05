@@ -4,39 +4,20 @@
  * Loads instantaneously with 0ms compilation overhead.
  */
 
+// Purge any legacy mock token if present
+try {
+  if (localStorage.getItem("eh_token") === "demo_attendee_token") {
+    localStorage.removeItem("eh_token");
+    localStorage.removeItem("eh_user");
+  }
+} catch (e) {}
+
 // Application State Store
-function getInitialUser() {
-  const storedUser = localStorage.getItem("eh_user");
-  const storedToken = localStorage.getItem("eh_token");
-  if (storedUser && storedToken) {
-    try {
-      return JSON.parse(storedUser);
-    } catch (e) {
-      return null;
-    }
-  }
-  return null;
-}
-
-function getInitialToken() {
-  const storedUser = localStorage.getItem("eh_user");
-  const storedToken = localStorage.getItem("eh_token");
-  if (storedUser && storedToken) {
-    return storedToken;
-  }
-  return null;
-}
-
-const initialAuthUser = getInitialUser();
-// First page displayed is "login" when visitor is unauthenticated
-const initialActiveTab = initialAuthUser
-  ? (initialAuthUser.role === "organizer" ? "organizer" : initialAuthUser.role === "operator" ? "checkin" : "my-tickets")
-  : "login";
-
+// The FIRST page displayed when visiting EventHub is strictly the Login Page
 const state = {
-  activeTab: initialActiveTab, // 'login' | 'events' | 'my-tickets' | 'checkin' | 'organizer'
-  currentUser: initialAuthUser,
-  token: getInitialToken(),
+  activeTab: "login", // 'login' | 'events' | 'my-tickets' | 'checkin' | 'organizer'
+  currentUser: null,
+  token: null,
   events: [],
   myTickets: [],
   selectedEvent: null,
@@ -233,8 +214,22 @@ async function handleRoleSwitch(targetRole) {
 // Backend Login Authentication
 async function handleLogin(e, overrideEmail, overridePass) {
   if (e) e.preventDefault();
-  const email = (overrideEmail || state.loginForm.email || "").trim();
-  const password = overridePass || state.loginForm.password || "";
+  let email = (overrideEmail || "").trim();
+  let password = overridePass || "";
+
+  // Check DOM inputs directly if not passed as override
+  if (!email) {
+    const domEmail = document.getElementById("login-email-input") || (e && e.target ? e.target.querySelector('input[type="email"]') : null);
+    if (domEmail && domEmail.value) email = domEmail.value.trim();
+  }
+  if (!password) {
+    const domPass = document.getElementById("login-password-input") || (e && e.target ? e.target.querySelector('input[type="password"]') : null);
+    if (domPass && domPass.value) password = domPass.value;
+  }
+
+  // Fallback to internal state
+  if (!email) email = (state.loginForm.email || "").trim();
+  if (!password) password = state.loginForm.password || "";
 
   if (!email || !password) {
     state.loginError = "Please enter both email and password.";
@@ -295,6 +290,10 @@ function fillLoginForm(email, password) {
   state.loginForm.email = email;
   state.loginForm.password = password;
   state.loginError = null;
+  const domEmail = document.getElementById("login-email-input");
+  const domPass = document.getElementById("login-password-input");
+  if (domEmail) domEmail.value = email;
+  if (domPass) domPass.value = password;
   render();
 }
 
@@ -2183,7 +2182,7 @@ window.triggerGoogleSignIn = function() {
 };
 
 // Initial Bootstrap on Page Load
-document.addEventListener("DOMContentLoaded", () => {
+function bootstrapApp() {
   render(); // Render active view (login page by default) immediately
   loadEvents();
   if (state.token && state.currentUser) {
@@ -2208,4 +2207,10 @@ document.addEventListener("DOMContentLoaded", () => {
       console.warn("Google Identity init warning", e);
     }
   }
-});
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", bootstrapApp);
+} else {
+  bootstrapApp();
+}

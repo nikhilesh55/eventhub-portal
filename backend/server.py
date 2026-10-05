@@ -51,13 +51,18 @@ class EventHubAPIHandler(SimpleHTTPRequestHandler):
         """Route standard HTTP server access logs to our structured logger."""
         logger.info(f"[HTTP] {self.address_string()} - {format % args}")
 
+    def end_headers(self):
+        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
+        super().end_headers()
+
     def _set_headers(self, status_code: int = 200, content_type: str = "application/json"):
         self.send_response(status_code)
         self.send_header("Content-Type", f"{content_type}; charset=utf-8")
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
-        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
         self.end_headers()
 
     def _send_json(self, data: Any, status_code: int = 200):

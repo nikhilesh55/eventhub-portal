@@ -38,22 +38,297 @@
   <!-- Google Identity Services SDK -->
   <script src="https://accounts.google.com/gsi/client" async defer></script>
 
-  <!-- Custom Stylesheet -->
-  <link rel="stylesheet" href="/css/style.css">
+  <!-- Custom Stylesheet with Cache-Buster -->
+  <link rel="stylesheet" href="/css/style.css?v=2.2.0">
 </head>
 <body class="bg-slate-50 text-slate-900 min-h-screen flex flex-col">
   <div id="root">
-    <!-- Instant Loading Placeholder -->
-    <div class="flex items-center justify-center min-h-screen">
-      <div class="text-center p-8 bg-white rounded-3xl shadow-xl border border-slate-200">
-        <div class="inline-block animate-spin rounded-full h-12 w-12 border-4 border-indigo-600 border-t-transparent mb-4"></div>
-        <h2 class="text-xl font-bold text-slate-800">Starting EventHub Portal...</h2>
-        <p class="text-sm text-slate-500 mt-1">Connecting to REST Services & Database</p>
+    <!-- Top Header -->
+    <header class="glass-header sticky top-0 z-40 px-4 lg:px-8 py-3.5 shadow-sm">
+      <div class="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-4">
+        <!-- Logo -->
+        <div class="flex items-center gap-3 cursor-pointer" onclick="setTab('events')">
+          <div class="w-10 h-10 rounded-xl bg-indigo-600 flex items-center justify-center text-white shadow-md font-bold text-xl">
+            🎟️
+          </div>
+          <div>
+            <div class="flex items-center gap-2">
+              <h1 class="text-xl font-extrabold tracking-tight text-slate-900">EventHub</h1>
+              <span class="text-xs font-semibold px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700">Project 08</span>
+            </div>
+            <p class="text-xs text-slate-500 hidden sm:block">Event Booking & QR Check-In Portal</p>
+          </div>
+        </div>
+
+        <!-- Navigation Tabs -->
+        <nav class="flex items-center bg-slate-100 p-1 rounded-xl text-sm font-medium">
+          <button onclick="setTab('events')" class="px-3.5 py-1.5 rounded-lg transition-all text-slate-600 hover:text-slate-900">
+            🎪 Explore
+          </button>
+          <button onclick="setTab('my-tickets')" class="px-3.5 py-1.5 rounded-lg transition-all text-slate-600 hover:text-slate-900 flex items-center gap-1.5">
+            <span>🎟️ My Tickets</span>
+          </button>
+          <button onclick="setTab('checkin')" class="px-3.5 py-1.5 rounded-lg transition-all text-slate-600 hover:text-slate-900">
+            ⚡ Check-In Gate
+          </button>
+          <button onclick="setTab('organizer')" class="px-3.5 py-1.5 rounded-lg transition-all text-slate-600 hover:text-slate-900">
+            📊 Organizer Hub
+          </button>
+          <button onclick="setTab('login')" class="px-3.5 py-1.5 rounded-lg transition-all bg-indigo-600 text-white shadow-sm font-semibold">
+            🔑 Sign In
+          </button>
+        </nav>
+
+        <!-- Right Side: Sign In Button -->
+        <div class="flex items-center gap-2">
+          <button
+            onclick="setTab('login')"
+            class="bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white text-xs font-bold px-4 py-2 rounded-xl shadow-md transition-all flex items-center gap-1.5"
+          >
+            <span>🔑</span>
+            <span>Sign In / Demo Login</span>
+          </button>
+        </div>
       </div>
-    </div>
+    </header>
+
+    <!-- Main Content Area: Login Page displayed by default -->
+    <main class="flex-1 max-w-7xl w-full mx-auto p-4 lg:p-8">
+      <div class="max-w-xl mx-auto py-4 sm:py-8">
+        <!-- Main Auth Card -->
+        <div class="bg-white rounded-3xl border border-slate-200 shadow-xl overflow-hidden">
+          <!-- Hero Header -->
+          <div class="bg-gradient-to-r from-indigo-700 via-indigo-600 to-purple-600 p-8 text-white text-center relative overflow-hidden">
+            <div class="inline-flex w-16 h-16 rounded-2xl bg-white/20 backdrop-blur-md items-center justify-center text-3xl mb-3 shadow-inner">
+              🎟️
+            </div>
+            <h2 class="text-2xl font-black tracking-tight">EventHub Access Portal</h2>
+            <p class="text-xs text-indigo-100 mt-1">Multi-Role Authentication & Session Management</p>
+          </div>
+
+          <div class="p-6 sm:p-8 space-y-6">
+            <!-- Sign in with Google Button -->
+            <div class="space-y-3">
+              <button
+                type="button"
+                onclick="openGoogleSignInModal()"
+                class="w-full py-3.5 px-4 rounded-2xl border border-slate-200 hover:border-slate-300 bg-white hover:bg-slate-50 text-slate-800 font-extrabold text-xs shadow-xs flex items-center justify-center gap-3 transition-all active:scale-[0.99] cursor-pointer"
+              >
+                <svg class="w-4 h-4 shrink-0" viewBox="0 0 24 24">
+                  <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                  <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                  <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>
+                  <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
+                </svg>
+                <span>Sign in with Google</span>
+              </button>
+
+              <!-- Divider -->
+              <div class="relative flex items-center justify-center">
+                <div class="flex-grow border-t border-slate-200"></div>
+                <span class="flex-shrink mx-3 text-slate-400 font-bold text-[10px] uppercase tracking-wider">or continue with credentials</span>
+                <div class="flex-grow border-t border-slate-200"></div>
+              </div>
+            </div>
+
+            <!-- Auth Mode Toggle -->
+            <div class="flex bg-slate-100 p-1.5 rounded-2xl text-xs font-bold">
+              <button
+                type="button"
+                onclick="setAuthMode('login')"
+                class="flex-1 py-2.5 rounded-xl transition-all bg-white text-indigo-700 shadow-sm"
+              >
+                🔑 Sign In
+              </button>
+              <button
+                type="button"
+                onclick="setAuthMode('register')"
+                class="flex-1 py-2.5 rounded-xl transition-all text-slate-500 hover:text-slate-800"
+              >
+                📝 Create Account
+              </button>
+            </div>
+
+            <!-- Login Form -->
+            <form id="eventhub-login-form" onsubmit="handleLoginFormSubmit(event)" class="space-y-4">
+              <div>
+                <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                  Email Address *
+                </label>
+                <div class="relative">
+                  <input
+                    type="email"
+                    required
+                    placeholder="e.g. organizer@eventhub.io"
+                    value=""
+                    id="login-email-input"
+                    class="w-full pl-10 pr-4 py-3 rounded-xl border border-slate-200 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                  <span class="absolute left-3.5 top-3.5 text-slate-400 text-sm">✉️</span>
+                </div>
+              </div>
+
+              <div>
+                <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                  Password *
+                </label>
+                <div class="relative">
+                  <input
+                    type="password"
+                    required
+                    placeholder="••••••••"
+                    value=""
+                    id="login-password-input"
+                    class="w-full pl-10 pr-4 py-3 rounded-xl border border-slate-200 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                  <span class="absolute left-3.5 top-3.5 text-slate-400 text-sm">🔒</span>
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                class="w-full py-3.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 active:scale-[0.99] text-white font-extrabold text-sm shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <span>Sign In to EventHub</span>
+                <span>→</span>
+              </button>
+            </form>
+
+            <!-- 1-Click Demo Credentials for Live Viva / Faculty Presentation -->
+            <div class="pt-5 border-t border-slate-100">
+              <div class="flex items-center justify-between mb-3">
+                <span class="text-[11px] font-black text-slate-400 uppercase tracking-wider">
+                  💡 Presentation Test Accounts
+                </span>
+                <span class="text-[10px] text-indigo-600 font-bold bg-indigo-50 px-2 py-0.5 rounded-full">
+                  1-Click Autofill
+                </span>
+              </div>
+
+              <div class="space-y-2.5">
+                <!-- Organizer Card -->
+                <div class="p-3.5 rounded-2xl bg-indigo-50/70 border border-indigo-100 hover:border-indigo-300 transition-all flex items-center justify-between gap-3">
+                  <div class="min-w-0">
+                    <div class="flex items-center gap-2">
+                      <span class="text-base">👑</span>
+                      <span class="font-extrabold text-slate-900 text-xs">Event Organizer</span>
+                      <span class="text-[10px] px-1.5 py-0.2 rounded font-mono font-bold bg-indigo-200/60 text-indigo-800">organizer</span>
+                    </div>
+                    <div class="text-[11px] text-slate-500 font-mono mt-0.5 truncate">
+                      organizer@eventhub.io · pass123
+                    </div>
+                  </div>
+                  <div class="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onclick="fillCredentials('organizer@eventhub.io', 'pass123')"
+                      class="px-2.5 py-1.5 rounded-lg bg-white border border-indigo-200 text-indigo-700 hover:bg-indigo-50 text-[11px] font-bold shadow-xs transition-all cursor-pointer"
+                      title="Fill into form inputs"
+                    >
+                      Autofill
+                    </button>
+                    <button
+                      type="button"
+                      onclick="instantLogin('organizer@eventhub.io', 'pass123')"
+                      class="px-2.5 py-1.5 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 text-[11px] font-bold shadow-sm transition-all cursor-pointer"
+                      title="Direct login via backend API"
+                    >
+                      Login ⚡
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Gate Operator Card -->
+                <div class="p-3.5 rounded-2xl bg-emerald-50/70 border border-emerald-100 hover:border-emerald-300 transition-all flex items-center justify-between gap-3">
+                  <div class="min-w-0">
+                    <div class="flex items-center gap-2">
+                      <span class="text-base">🛡️</span>
+                      <span class="font-extrabold text-slate-900 text-xs">Gate Operator</span>
+                      <span class="text-[10px] px-1.5 py-0.2 rounded font-mono font-bold bg-emerald-200/60 text-emerald-800">operator</span>
+                    </div>
+                    <div class="text-[11px] text-slate-500 font-mono mt-0.5 truncate">
+                      operator@eventhub.io · pass123
+                    </div>
+                  </div>
+                  <div class="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onclick="fillCredentials('operator@eventhub.io', 'pass123')"
+                      class="px-2.5 py-1.5 rounded-lg bg-white border border-emerald-200 text-emerald-700 hover:bg-emerald-50 text-[11px] font-bold shadow-xs transition-all cursor-pointer"
+                      title="Fill into form inputs"
+                    >
+                      Autofill
+                    </button>
+                    <button
+                      type="button"
+                      onclick="instantLogin('operator@eventhub.io', 'pass123')"
+                      class="px-2.5 py-1.5 rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 text-[11px] font-bold shadow-sm transition-all cursor-pointer"
+                      title="Direct login via backend API"
+                    >
+                      Login ⚡
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Attendee Card -->
+                <div class="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 hover:border-slate-300 transition-all flex items-center justify-between gap-3">
+                  <div class="min-w-0">
+                    <div class="flex items-center gap-2">
+                      <span class="text-base">👤</span>
+                      <span class="font-extrabold text-slate-900 text-xs">Event Attendee</span>
+                      <span class="text-[10px] px-1.5 py-0.2 rounded font-mono font-bold bg-slate-200 text-slate-700">attendee</span>
+                    </div>
+                    <div class="text-[11px] text-slate-500 font-mono mt-0.5 truncate">
+                      attendee@eventhub.io · pass123
+                    </div>
+                  </div>
+                  <div class="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onclick="fillCredentials('attendee@eventhub.io', 'pass123')"
+                      class="px-2.5 py-1.5 rounded-lg bg-white border border-slate-300 text-slate-700 hover:bg-slate-100 text-[11px] font-bold shadow-xs transition-all cursor-pointer"
+                      title="Fill into form inputs"
+                    >
+                      Autofill
+                    </button>
+                    <button
+                      type="button"
+                      onclick="instantLogin('attendee@eventhub.io', 'pass123')"
+                      class="px-2.5 py-1.5 rounded-lg bg-slate-800 text-white hover:bg-slate-900 text-[11px] font-bold shadow-sm transition-all cursor-pointer"
+                      title="Direct login via backend API"
+                    >
+                      Login ⚡
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Guest explore option -->
+            <div class="pt-4 border-t border-slate-100 text-center">
+              <button
+                type="button"
+                onclick="setTab('events')"
+                class="text-xs font-semibold text-slate-500 hover:text-indigo-600 transition-colors cursor-pointer"
+              >
+                Want to preview public events first? <span class="font-bold text-indigo-600 underline">Browse Events as Guest →</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- Footer -->
+    <footer class="bg-white border-t border-slate-200 py-6 text-center text-xs text-slate-500">
+      <div class="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2">
+        <span>EventHub · Industry Full-Stack Challenge · Project 08</span>
+        <span class="font-mono text-slate-400">REST API • SQLite Relational DB • OpenStreetMap Nominatim</span>
+      </div>
+    </footer>
   </div>
 
-  <!-- Native JavaScript Application Logic (Ultra-fast, zero-build, zero-transpile) -->
-  <script src="/js/app.js"></script>
+  <!-- Native JavaScript Application Logic (Ultra-fast, zero-build, zero-transpile) with Cache Buster -->
+  <script src="/js/app.js?v=2.2.0"></script>
 </body>
 </html>

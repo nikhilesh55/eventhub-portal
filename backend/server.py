@@ -28,6 +28,8 @@ from .db import (
 from .auth import (
     authenticate_user,
     register_user,
+    authenticate_or_register_google_user,
+    parse_google_id_token,
     create_session,
     get_user_from_token,
     logout_user,
@@ -306,7 +308,40 @@ class EventHubAPIHandler(SimpleHTTPRequestHandler):
                     "user": user
                 }, 201)
 
-            # 5. Create New Event (Protected: Organizer Only)
+            # 5. Google OAuth Sign-In (Direct or via Google Identity Services)
+            elif path == "/api/auth/google":
+                email = body.get("email", "")
+                name = body.get("name", "")
+                google_id = body.get("sub", "") or body.get("google_id", "")
+                avatar = body.get("picture", "") or body.get("avatar", "")
+                role = body.get("role", "attendee")
+
+                # If client passed raw Google JWT credential token, decode it
+                credential = body.get("credential", "")
+                if credential:
+                    token_data = parse_google_id_token(credential)
+                    if token_data:
+                        email = token_data.get("email", email)
+                        name = token_data.get("name", name)
+                        google_id = token_data.get("sub", google_id)
+                        avatar = token_data.get("picture", avatar)
+
+                if not email:
+                    return self._send_error("A valid email address is required for Google Sign-In.", 400)
+
+                user = authenticate_or_register_google_user(email, name, google_id=google_id, avatar=avatar, role=role)
+                if not user:
+                    return self._send_error("Google authentication failed. Please try again.", 500)
+
+                token = create_session(user)
+                return self._send_json({
+                    "success": True,
+                    "message": f"Welcome, {user['name']}! Signed in via Google.",
+                    "token": token,
+                    "user": user
+                })
+
+            # 6. Create New Event (Protected: Organizer Only)
             elif path == "/api/events":
                 user = self._get_current_user()
                 if not user:

@@ -33,7 +33,15 @@ from backend.db import (
     get_event_attendees,
     get_organizer_metrics
 )
-from backend.auth import authenticate_user, register_user, create_session, get_user_from_token, logout_user
+from backend.auth import (
+    authenticate_user,
+    register_user,
+    authenticate_or_register_google_user,
+    parse_google_id_token,
+    create_session,
+    get_user_from_token,
+    logout_user
+)
 from backend.external import geocode_address
 
 
@@ -207,6 +215,47 @@ class EventHubTestCase(unittest.TestCase):
         self.assertEqual(attendee["role"], "attendee")
         self.assertEqual(operator["role"], "operator")
         self.assertEqual(organizer["role"], "organizer")
+
+    def test_16_google_signin_new_user(self):
+        """Verify new Google user is automatically provisioned and logged in."""
+        user = authenticate_or_register_google_user(
+            email="new_google_attendee@gmail.com",
+            name="Maya Google User",
+            role="attendee"
+        )
+        self.assertIsNotNone(user, "New Google user should be created")
+        self.assertEqual(user["email"], "new_google_attendee@gmail.com")
+        self.assertEqual(user["role"], "attendee")
+        self.assertTrue(user["id"] > 0)
+
+        token = create_session(user)
+        self.assertTrue(token.startswith("eh_sec_"))
+        session_user = get_user_from_token(token)
+        self.assertEqual(session_user["name"], "Maya Google User")
+
+    def test_17_google_signin_existing_user(self):
+        """Verify existing user signing in with Google is recognized without duplicate row."""
+        user = authenticate_or_register_google_user(
+            email="organizer@eventhub.io",
+            name="Sarah Jenkins",
+            role="organizer"
+        )
+        self.assertIsNotNone(user, "Existing user should be authenticated")
+        self.assertEqual(user["id"], 1, "Should map to existing user ID #1")
+        self.assertEqual(user["role"], "organizer")
+
+    def test_18_google_id_token_decoding(self):
+        """Verify JWT decoding of Google Identity Services credential payload."""
+        import base64
+        header = base64.urlsafe_b64encode(b'{"alg":"RS256"}').decode().rstrip("=")
+        payload = base64.urlsafe_b64encode(b'{"email":"decoded@gmail.com","name":"Decoded Name","sub":"1234567890"}').decode().rstrip("=")
+        mock_jwt = f"{header}.{payload}.dummy_signature"
+
+        decoded = parse_google_id_token(mock_jwt)
+        self.assertIsNotNone(decoded)
+        self.assertEqual(decoded.get("email"), "decoded@gmail.com")
+        self.assertEqual(decoded.get("name"), "Decoded Name")
+        self.assertEqual(decoded.get("sub"), "1234567890")
 
 
 if __name__ == "__main__":

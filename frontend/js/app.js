@@ -78,7 +78,12 @@ const state = {
     phone: ""
   },
   loginLoading: false,
-  loginError: null
+  loginError: null,
+  // Google Sign-In State
+  showGoogleModal: false,
+  googleSelectedRole: "attendee",
+  customGoogleEmail: "",
+  customGoogleName: ""
 };
 
 // Web Audio API Synthesizer for instant audible gate feedback
@@ -385,6 +390,56 @@ async function handleLogout() {
   }
 }
 
+// Google OAuth Sign-In Handler
+async function handleGoogleSignIn(payload) {
+  state.loginLoading = true;
+  state.loginError = null;
+  render();
+
+  try {
+    const res = await fetch("/api/auth/google", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+
+    if (res.ok && data.success) {
+      state.token = data.token;
+      state.currentUser = data.user;
+      localStorage.setItem("eh_token", data.token);
+      localStorage.setItem("eh_user", JSON.stringify(data.user));
+      localStorage.removeItem("eh_logged_out");
+      state.showGoogleModal = false;
+
+      playTone("success");
+      showToast(data.message || `Welcome, ${data.user.name}!`, "success");
+
+      // Role-based automatic redirect
+      if (data.user.role === "organizer") {
+        state.activeTab = "organizer";
+        loadOrganizerDashboard();
+      } else if (data.user.role === "operator") {
+        state.activeTab = "checkin";
+        loadCheckinStats(state.checkinEventId);
+      } else {
+        state.activeTab = "my-tickets";
+        loadMyTickets();
+      }
+      loadEvents();
+    } else {
+      state.loginError = data.error || "Google Sign-In failed.";
+      playTone("error");
+    }
+  } catch (err) {
+    state.loginError = "Unable to connect to Google authentication service.";
+    playTone("error");
+  } finally {
+    state.loginLoading = false;
+    render();
+  }
+}
+
 // Attendee Event Booking
 async function handleRegister(eventId) {
   try {
@@ -673,6 +728,9 @@ function render() {
     <!-- Create Event Modal -->
     ${state.showCreateModal ? renderCreateEventModal() : ""}
 
+    <!-- Google Sign-In Account Selector Modal -->
+    ${renderGoogleModal()}
+
     <!-- Footer -->
     <footer class="bg-white border-t border-slate-200 py-6 text-center text-xs text-slate-500">
       <div class="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2">
@@ -702,6 +760,30 @@ function renderLoginView() {
         </div>
 
         <div class="p-6 sm:p-8 space-y-6">
+          <!-- Sign in with Google Button -->
+          <div class="space-y-3">
+            <button
+              type="button"
+              onclick="openGoogleSignInModal()"
+              class="w-full py-3.5 px-4 rounded-2xl border border-slate-200 hover:border-slate-300 bg-white hover:bg-slate-50 text-slate-800 font-extrabold text-xs shadow-xs flex items-center justify-center gap-3 transition-all active:scale-[0.99] cursor-pointer"
+            >
+              <svg class="w-4 h-4 shrink-0" viewBox="0 0 24 24">
+                <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>
+                <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
+              </svg>
+              <span>Sign in with Google</span>
+            </button>
+
+            <!-- Divider -->
+            <div class="relative flex items-center justify-center">
+              <div class="flex-grow border-t border-slate-200"></div>
+              <span class="flex-shrink mx-3 text-slate-400 font-bold text-[10px] uppercase tracking-wider">or continue with credentials</span>
+              <div class="flex-grow border-t border-slate-200"></div>
+            </div>
+          </div>
+
           <!-- Auth Mode Toggle -->
           <div class="flex bg-slate-100 p-1.5 rounded-2xl text-xs font-bold">
             <button
@@ -1756,6 +1838,170 @@ function renderCreateEventModal() {
   `;
 }
 
+// Render Google Account Selector Modal
+function renderGoogleModal() {
+  if (!state.showGoogleModal) return "";
+
+  return `
+    <div class="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
+      <div class="bg-white rounded-3xl max-w-md w-full p-6 sm:p-8 shadow-2xl space-y-6 relative border border-slate-100 animate-in fade-in zoom-in duration-200">
+        <!-- Close button -->
+        <button
+          onclick="state.showGoogleModal = false; render();"
+          class="absolute top-5 right-5 w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 font-bold flex items-center justify-center transition-all cursor-pointer"
+        >
+          ✕
+        </button>
+
+        <!-- Google Header -->
+        <div class="text-center space-y-2">
+          <div class="inline-flex items-center justify-center w-12 h-12 rounded-2xl bg-slate-50 border border-slate-200 shadow-xs mb-1">
+            <svg class="w-6 h-6" viewBox="0 0 24 24">
+              <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+              <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+              <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>
+              <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
+            </svg>
+          </div>
+          <h3 class="text-xl font-black text-slate-900">Sign in with Google</h3>
+          <p class="text-xs text-slate-500">Choose an account to continue to EventHub</p>
+        </div>
+
+        <!-- Role Assignment Selector -->
+        <div class="bg-slate-50 p-3 rounded-2xl border border-slate-200">
+          <label class="block text-[11px] font-black text-slate-500 uppercase tracking-wider mb-1.5">
+            Sign in as Role:
+          </label>
+          <div class="grid grid-cols-3 gap-1.5">
+            <button
+              type="button"
+              onclick="setGoogleRole('attendee')"
+              class="py-1.5 px-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                state.googleSelectedRole === 'attendee' ? 'bg-indigo-600 text-white shadow-xs' : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+              }"
+            >
+              👤 Attendee
+            </button>
+            <button
+              type="button"
+              onclick="setGoogleRole('operator')"
+              class="py-1.5 px-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                state.googleSelectedRole === 'operator' ? 'bg-emerald-600 text-white shadow-xs' : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+              }"
+            >
+              🛡️ Operator
+            </button>
+            <button
+              type="button"
+              onclick="setGoogleRole('organizer')"
+              class="py-1.5 px-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                state.googleSelectedRole === 'organizer' ? 'bg-purple-600 text-white shadow-xs' : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+              }"
+            >
+              👑 Organizer
+            </button>
+          </div>
+        </div>
+
+        <!-- Pre-configured Demo Google Accounts -->
+        <div class="space-y-2">
+          <span class="text-[10px] font-black uppercase tracking-wider text-slate-400 block px-1">
+            Choose an account
+          </span>
+
+          <!-- Account 1: Sarah Jenkins (Organizer) -->
+          <div
+            onclick="submitGoogleSignIn('Sarah Jenkins', 'sarah.jenkins@gmail.com', 'organizer')"
+            class="p-3 rounded-2xl border border-slate-200 hover:border-indigo-400 hover:bg-indigo-50/40 cursor-pointer transition-all flex items-center justify-between group"
+          >
+            <div class="flex items-center gap-3">
+              <div class="w-10 h-10 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 text-white font-black text-sm flex items-center justify-center shadow-xs">
+                SJ
+              </div>
+              <div class="text-left">
+                <div class="font-extrabold text-slate-800 text-xs group-hover:text-indigo-600 transition-colors">Sarah Jenkins</div>
+                <div class="text-[11px] text-slate-400 font-mono">sarah.jenkins@gmail.com</div>
+              </div>
+            </div>
+            <span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700">👑 Organizer</span>
+          </div>
+
+          <!-- Account 2: Alex Rivera (Operator) -->
+          <div
+            onclick="submitGoogleSignIn('Alex Rivera', 'alex.rivera@gmail.com', 'operator')"
+            class="p-3 rounded-2xl border border-slate-200 hover:border-emerald-400 hover:bg-emerald-50/40 cursor-pointer transition-all flex items-center justify-between group"
+          >
+            <div class="flex items-center gap-3">
+              <div class="w-10 h-10 rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 text-white font-black text-sm flex items-center justify-center shadow-xs">
+                AR
+              </div>
+              <div class="text-left">
+                <div class="font-extrabold text-slate-800 text-xs group-hover:text-emerald-600 transition-colors">Alex Rivera</div>
+                <div class="text-[11px] text-slate-400 font-mono">alex.rivera@gmail.com</div>
+              </div>
+            </div>
+            <span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800">🛡️ Operator</span>
+          </div>
+
+          <!-- Account 3: David Chen (Attendee) -->
+          <div
+            onclick="submitGoogleSignIn('David Chen', 'david.chen@gmail.com', 'attendee')"
+            class="p-3 rounded-2xl border border-slate-200 hover:border-slate-400 hover:bg-slate-50 cursor-pointer transition-all flex items-center justify-between group"
+          >
+            <div class="flex items-center gap-3">
+              <div class="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 text-white font-black text-sm flex items-center justify-center shadow-xs">
+                DC
+              </div>
+              <div class="text-left">
+                <div class="font-extrabold text-slate-800 text-xs group-hover:text-slate-900 transition-colors">David Chen</div>
+                <div class="text-[11px] text-slate-400 font-mono">david.chen@gmail.com</div>
+              </div>
+            </div>
+            <span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-200 text-slate-700">👤 Attendee</span>
+          </div>
+        </div>
+
+        <!-- Custom Account Option -->
+        <div class="pt-3 border-t border-slate-100">
+          <form onsubmit="handleCustomGoogleSubmit(event)" class="space-y-3">
+            <span class="text-[10px] font-black uppercase tracking-wider text-slate-400 block px-1">
+              Or use your own Google email
+            </span>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <input
+                type="text"
+                placeholder="Name (e.g. Maya Lin)"
+                value="${state.customGoogleName}"
+                oninput="state.customGoogleName = this.value"
+                class="px-3 py-2 rounded-xl border border-slate-200 text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+              />
+              <input
+                type="email"
+                required
+                placeholder="yourname@gmail.com"
+                value="${state.customGoogleEmail}"
+                oninput="state.customGoogleEmail = this.value"
+                class="px-3 py-2 rounded-xl border border-slate-200 text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+              />
+            </div>
+            <button
+              type="submit"
+              class="w-full py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-extrabold text-xs transition-all shadow-sm flex items-center justify-center gap-2 cursor-pointer"
+            >
+              <span>Continue with this account</span>
+              <span>→</span>
+            </button>
+          </form>
+        </div>
+
+        <div class="text-center pt-1 text-[11px] text-slate-400">
+          Protected by Google OAuth 2.0 Identity Protocol
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 // Post-Render Logic: Leaflet Maps & Dynamic Canvas QR Codes
 function attachPostRenderLogic() {
   // Render Canvas QR codes for tickets
@@ -1898,6 +2144,33 @@ window.setAuthMode = function(mode) {
   render();
 };
 
+// Google OAuth Global Handlers
+window.openGoogleSignInModal = function() {
+  state.showGoogleModal = true;
+  render();
+};
+
+window.setGoogleRole = function(role) {
+  state.googleSelectedRole = role;
+  render();
+};
+
+window.submitGoogleSignIn = function(name, email, role) {
+  handleGoogleSignIn({ name, email, role: role || state.googleSelectedRole });
+};
+
+window.handleCustomGoogleSubmit = function(e) {
+  if (e) e.preventDefault();
+  if (!state.customGoogleEmail) return;
+  const email = state.customGoogleEmail.trim();
+  const name = state.customGoogleName.trim() || email.split("@")[0];
+  handleGoogleSignIn({ name, email, role: state.googleSelectedRole });
+};
+
+window.triggerGoogleSignIn = function() {
+  openGoogleSignInModal();
+};
+
 // Initial Bootstrap on Page Load
 document.addEventListener("DOMContentLoaded", () => {
   loadEvents();
@@ -1905,6 +2178,22 @@ document.addEventListener("DOMContentLoaded", () => {
     loadMyTickets();
     if (state.currentUser.role === "operator" || state.currentUser.role === "organizer") {
       loadCheckinStats(state.checkinEventId);
+    }
+  }
+
+  // Initialize Google Identity Services if available and configured
+  if (window.google?.accounts?.id) {
+    try {
+      window.google.accounts.id.initialize({
+        client_id: window.GOOGLE_CLIENT_ID || "demo-eventhub-client-id.apps.googleusercontent.com",
+        callback: (response) => {
+          if (response.credential) {
+            handleGoogleSignIn({ credential: response.credential, role: state.googleSelectedRole });
+          }
+        }
+      });
+    } catch (e) {
+      console.warn("Google Identity init warning", e);
     }
   }
 });

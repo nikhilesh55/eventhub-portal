@@ -6,35 +6,36 @@
 
 // Application State Store
 function getInitialUser() {
-  if (localStorage.getItem("eh_logged_out") === "true") {
-    return null;
-  }
   const storedUser = localStorage.getItem("eh_user");
-  if (storedUser) {
+  const storedToken = localStorage.getItem("eh_token");
+  if (storedUser && storedToken) {
     try {
       return JSON.parse(storedUser);
     } catch (e) {
       return null;
     }
   }
-  return {
-    id: 3,
-    name: "David Chen",
-    email: "attendee@eventhub.io",
-    role: "attendee"
-  };
+  return null;
 }
 
 function getInitialToken() {
-  if (localStorage.getItem("eh_logged_out") === "true") {
-    return null;
+  const storedUser = localStorage.getItem("eh_user");
+  const storedToken = localStorage.getItem("eh_token");
+  if (storedUser && storedToken) {
+    return storedToken;
   }
-  return localStorage.getItem("eh_token") || "demo_attendee_token";
+  return null;
 }
 
+const initialAuthUser = getInitialUser();
+// First page displayed is "login" when visitor is unauthenticated
+const initialActiveTab = initialAuthUser
+  ? (initialAuthUser.role === "organizer" ? "organizer" : initialAuthUser.role === "operator" ? "checkin" : "my-tickets")
+  : "login";
+
 const state = {
-  activeTab: "events", // 'events' | 'my-tickets' | 'checkin' | 'organizer' | 'login'
-  currentUser: getInitialUser(),
+  activeTab: initialActiveTab, // 'login' | 'events' | 'my-tickets' | 'checkin' | 'organizer'
+  currentUser: initialAuthUser,
   token: getInitialToken(),
   events: [],
   myTickets: [],
@@ -384,7 +385,7 @@ async function handleLogout() {
     state.myTickets = [];
     state.organizerMetrics = null;
     state.selectedEventAttendees = [];
-    state.activeTab = "events";
+    state.activeTab = "login";
     showToast("Signed out successfully.", "success");
     render();
   }
@@ -976,6 +977,16 @@ function renderLoginView() {
                   </div>
                 </div>
               </div>
+            </div>
+            <!-- Guest explore option -->
+            <div class="pt-4 border-t border-slate-100 text-center">
+              <button
+                type="button"
+                onclick="setTab('events')"
+                class="text-xs font-semibold text-slate-500 hover:text-indigo-600 transition-colors cursor-pointer"
+              >
+                Want to preview public events first? <span class="font-bold text-indigo-600 underline">Browse Events as Guest →</span>
+              </button>
             </div>
           ` : `
             <!-- Registration Form -->
@@ -2173,6 +2184,7 @@ window.triggerGoogleSignIn = function() {
 
 // Initial Bootstrap on Page Load
 document.addEventListener("DOMContentLoaded", () => {
+  render(); // Render active view (login page by default) immediately
   loadEvents();
   if (state.token && state.currentUser) {
     loadMyTickets();

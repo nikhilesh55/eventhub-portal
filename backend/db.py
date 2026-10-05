@@ -10,6 +10,7 @@ import hashlib
 import json
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional, Tuple
+from .logger import logger
 
 DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "eventhub.db")
 
@@ -114,6 +115,7 @@ def init_db():
 
     conn.commit()
     conn.close()
+    logger.info(f"[DB] Initialized database schema with 5 relational tables at: {DB_PATH}")
 
 
 def log_organizer_action(action: str, details: str, event_id: Optional[int] = None, user_id: Optional[int] = None):
@@ -138,6 +140,8 @@ def seed_data():
     if cursor.fetchone()[0] > 0:
         conn.close()
         return
+
+    logger.info("[DB] Seeding default users, events, and sample registrations for demonstration")
 
     # Seed Default Users for each role
     users = [
@@ -359,6 +363,7 @@ def create_event(data: Dict[str, Any], organizer_id: int) -> Dict[str, Any]:
         event_id=event_id,
         user_id=organizer_id
     )
+    logger.info(f"[DB] Created event #{event_id}: '{data['title']}' (Capacity: {data['capacity']}) by Organizer #{organizer_id}")
 
     conn.close()
     return get_event_by_id(event_id)
@@ -400,6 +405,7 @@ def register_attendee(event_id: int, user_id: int) -> Tuple[bool, str, Optional[
     current_count = cursor.fetchone()[0]
     if current_count >= event["capacity"]:
         conn.close()
+        logger.warning(f"[DB] Registration blocked: Event #{event_id} has reached maximum capacity ({event['capacity']})")
         return False, f"Event has reached maximum capacity ({event['capacity']} attendees).", None
 
     # Check already registered
@@ -408,6 +414,7 @@ def register_attendee(event_id: int, user_id: int) -> Tuple[bool, str, Optional[
     if existing:
         conn.close()
         if existing["status"] == "confirmed":
+            logger.warning(f"[DB] Duplicate registration blocked: User #{user_id} already registered for event #{event_id}")
             return False, "You have already registered for this event.", None
         elif existing["status"] == "cancelled":
             # Re-activate registration
@@ -415,6 +422,7 @@ def register_attendee(event_id: int, user_id: int) -> Tuple[bool, str, Optional[
             cursor = get_db_connection().cursor()
             cursor.execute("UPDATE registrations SET status = 'confirmed' WHERE id = ?", (existing["id"],))
             conn.commit()
+            logger.info(f"[DB] Re-activated registration #{existing['id']} for user #{user_id} on event #{event_id}")
             return True, "Registration re-activated successfully!", {"id": existing["id"], "ticket_token": token}
 
     # Generate unique ticket token: EH-{YEAR}-{RANDOM_HEX}-{CHECKSUM}
@@ -451,6 +459,7 @@ def register_attendee(event_id: int, user_id: int) -> Tuple[bool, str, Optional[
             event_id=event_id,
             user_id=user_id
         )
+        logger.info(f"[DB] Confirmed registration #{reg_id}: '{user_name}' for event #{event_id} (Token: {ticket_token})")
 
         reg_data = {
             "id": reg_id,
@@ -492,15 +501,18 @@ def validate_checkin(token: str, operator_id: int, target_event_id: Optional[int
 
     if not reg:
         conn.close()
+        logger.warning(f"[DB] Check-in failed: Token '{token}' not found")
         return "INVALID_TOKEN", "Ticket token not found in the registration system.", None
 
     if reg["reg_status"] != "confirmed":
         conn.close()
+        logger.warning(f"[DB] Check-in failed: Token '{token}' status is '{reg['reg_status']}' (not confirmed)")
         return "INVALID_TOKEN", f"This ticket has status '{reg['reg_status']}' and is not valid.", None
 
     # Check event match if operator has selected an active event
     if target_event_id and reg["event_id"] != target_event_id:
         conn.close()
+        logger.warning(f"[DB] Check-in failed: Token '{token}' is for event #{reg['event_id']}, target is #{target_event_id}")
         return "EVENT_MISMATCH", f"This ticket is for '{reg['event_title']}', not the currently selected event.", {
             "ticket_event": reg["event_title"],
             "attendee_name": reg["attendee_name"]
@@ -517,6 +529,7 @@ def validate_checkin(token: str, operator_id: int, target_event_id: Optional[int
 
     if existing_checkin:
         conn.close()
+        logger.warning(f"[DB] Duplicate check-in rejected: '{reg['attendee_name']}' was already checked in at {existing_checkin['checkin_time']} by {existing_checkin['operator_name']}")
         return "ALREADY_CHECKED_IN", f"Attendee already checked in at {existing_checkin['checkin_time']} by {existing_checkin['operator_name']}.", {
             "attendee_name": reg["attendee_name"],
             "ticket_token": reg["ticket_token"],
@@ -540,6 +553,7 @@ def validate_checkin(token: str, operator_id: int, target_event_id: Optional[int
         event_id=reg["event_id"],
         user_id=operator_id
     )
+    logger.info(f"[DB] Check-in verified: '{reg['attendee_name']}' admitted to '{reg['event_title']}' by Operator #{operator_id}")
 
     result_data = {
         "attendee_name": reg["attendee_name"],

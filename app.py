@@ -17,6 +17,7 @@ sys.path.insert(0, APP_DIR)
 from backend.db import init_db, seed_data, DB_PATH
 from backend.auth import seed_default_sessions
 from backend.server import run_server
+from backend.logger import logger
 
 
 def find_free_port(start_port: int = 8080, max_attempts: int = 15) -> int:
@@ -47,8 +48,11 @@ def main():
     port_env = os.environ.get("PORT")
     if port_env:
         port = int(port_env)
+        logger.info(f"[STARTUP] Detected Render cloud PORT environment variable: {port}")
     else:
         port = find_free_port(8080)
+        logger.info(f"[STARTUP] Running locally; selected port: {port}")
+
     print(f"[2/2] Starting REST API & Web Server on port {port}...")
     print(f"\n🚀 EventHub is LIVE!")
     print(f"   • Local Web Portal  : http://127.0.0.1:{port}/")

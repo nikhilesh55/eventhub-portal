@@ -33,7 +33,7 @@ from backend.db import (
     get_event_attendees,
     get_organizer_metrics
 )
-from backend.auth import authenticate_user, register_user, create_session, get_user_from_token
+from backend.auth import authenticate_user, register_user, create_session, get_user_from_token, logout_user
 from backend.external import geocode_address
 
 
@@ -161,6 +161,52 @@ class EventHubTestCase(unittest.TestCase):
         self.assertIn("lat", result["data"])
         self.assertIn("lon", result["data"])
         self.assertIn("OpenStreetMap", result["attribution"])
+
+    def test_11_login_valid_credentials(self):
+        """Verify valid credentials return user profile and generate active session."""
+        user = authenticate_user("organizer@eventhub.io", "pass123")
+        self.assertIsNotNone(user, "Expected valid user to authenticate successfully")
+        self.assertEqual(user["role"], "organizer")
+
+        token = create_session(user)
+        self.assertTrue(token.startswith("eh_sec_"), "Token should have standard prefix")
+
+        session_user = get_user_from_token(token)
+        self.assertIsNotNone(session_user)
+        self.assertEqual(session_user["email"], "organizer@eventhub.io")
+
+    def test_12_login_invalid_password_rejected(self):
+        """Verify incorrect password fails authentication."""
+        user = authenticate_user("organizer@eventhub.io", "incorrect_pass")
+        self.assertIsNone(user, "Invalid password must return None")
+
+    def test_13_login_nonexistent_email_rejected(self):
+        """Verify unknown email fails authentication."""
+        user = authenticate_user("nonexistent@domain.com", "any_password")
+        self.assertIsNone(user, "Unknown email must return None")
+
+    def test_14_logout_invalidates_session(self):
+        """Verify logging out deletes token from active sessions."""
+        user = authenticate_user("attendee@eventhub.io", "pass123")
+        token = create_session(user)
+        self.assertIsNotNone(get_user_from_token(token), "Session must be active before logout")
+
+        logged_out = logout_user(token)
+        self.assertTrue(logged_out, "logout_user should return True for active session")
+        self.assertIsNone(get_user_from_token(token), "Session must be None after logout")
+
+        # Second logout should return False
+        self.assertFalse(logout_user(token), "Logging out with an already-invalidated token should return False")
+
+    def test_15_role_based_permissions(self):
+        """Verify role distinctions between attendee, operator, and organizer."""
+        attendee = authenticate_user("attendee@eventhub.io", "pass123")
+        operator = authenticate_user("operator@eventhub.io", "pass123")
+        organizer = authenticate_user("organizer@eventhub.io", "pass123")
+
+        self.assertEqual(attendee["role"], "attendee")
+        self.assertEqual(operator["role"], "operator")
+        self.assertEqual(organizer["role"], "organizer")
 
 
 if __name__ == "__main__":

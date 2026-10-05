@@ -5,15 +5,37 @@
  */
 
 // Application State Store
-const state = {
-  activeTab: "events", // 'events' | 'my-tickets' | 'checkin' | 'organizer'
-  currentUser: {
+function getInitialUser() {
+  if (localStorage.getItem("eh_logged_out") === "true") {
+    return null;
+  }
+  const storedUser = localStorage.getItem("eh_user");
+  if (storedUser) {
+    try {
+      return JSON.parse(storedUser);
+    } catch (e) {
+      return null;
+    }
+  }
+  return {
     id: 3,
     name: "David Chen",
     email: "attendee@eventhub.io",
     role: "attendee"
-  },
-  token: localStorage.getItem("eh_token") || "demo_attendee_token",
+  };
+}
+
+function getInitialToken() {
+  if (localStorage.getItem("eh_logged_out") === "true") {
+    return null;
+  }
+  return localStorage.getItem("eh_token") || "demo_attendee_token";
+}
+
+const state = {
+  activeTab: "events", // 'events' | 'my-tickets' | 'checkin' | 'organizer' | 'login'
+  currentUser: getInitialUser(),
+  token: getInitialToken(),
   events: [],
   myTickets: [],
   selectedEvent: null,
@@ -41,7 +63,22 @@ const state = {
     longitude: -122.4194
   },
   geocodingLoading: false,
-  toast: null
+  toast: null,
+  // Login & Authentication View State
+  authMode: "login", // 'login' | 'register'
+  loginForm: {
+    email: "",
+    password: ""
+  },
+  registerForm: {
+    name: "",
+    email: "",
+    password: "",
+    role: "attendee",
+    phone: ""
+  },
+  loginLoading: false,
+  loginError: null
 };
 
 // Web Audio API Synthesizer for instant audible gate feedback
@@ -140,7 +177,8 @@ async function loadOrganizerDashboard() {
 async function loadCheckinStats(eventId) {
   if (!eventId) return;
   try {
-    const res = await fetch(`/api/checkin/stats/${eventId}`);
+    const headers = state.token ? { Authorization: `Bearer ${state.token}` } : {};
+    const res = await fetch(`/api/checkin/stats/${eventId}`, { headers });
     const data = await res.json();
     if (data.success) {
       state.checkinStats = data.stats;
@@ -164,6 +202,8 @@ async function handleRoleSwitch(targetRole) {
       state.currentUser = data.user;
       state.token = data.token;
       localStorage.setItem("eh_token", data.token);
+      localStorage.setItem("eh_user", JSON.stringify(data.user));
+      localStorage.removeItem("eh_logged_out");
 
       if (targetRole === "operator") {
         state.activeTab = "checkin";
@@ -181,6 +221,167 @@ async function handleRoleSwitch(targetRole) {
     }
   } catch (e) {
     showToast("Error switching role", "error");
+  }
+}
+
+// Backend Login Authentication
+async function handleLogin(e, overrideEmail, overridePass) {
+  if (e) e.preventDefault();
+  const email = (overrideEmail || state.loginForm.email || "").trim();
+  const password = overridePass || state.loginForm.password || "";
+
+  if (!email || !password) {
+    state.loginError = "Please enter both email and password.";
+    render();
+    return;
+  }
+
+  state.loginLoading = true;
+  state.loginError = null;
+  render();
+
+  try {
+    const res = await fetch("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password })
+    });
+    const data = await res.json();
+
+    if (res.ok && data.success) {
+      state.token = data.token;
+      state.currentUser = data.user;
+      localStorage.setItem("eh_token", data.token);
+      localStorage.setItem("eh_user", JSON.stringify(data.user));
+      localStorage.removeItem("eh_logged_out");
+
+      state.loginForm.password = "";
+      playTone("success");
+      showToast(data.message || `Welcome back, ${data.user.name}!`, "success");
+
+      // Role-based automatic redirect
+      if (data.user.role === "organizer") {
+        state.activeTab = "organizer";
+        loadOrganizerDashboard();
+      } else if (data.user.role === "operator") {
+        state.activeTab = "checkin";
+        loadCheckinStats(state.checkinEventId);
+      } else {
+        state.activeTab = "my-tickets";
+        loadMyTickets();
+      }
+      loadEvents();
+    } else {
+      state.loginError = data.error || "Invalid email or password.";
+      playTone("error");
+    }
+  } catch (err) {
+    state.loginError = "Unable to connect to authentication server.";
+    playTone("error");
+  } finally {
+    state.loginLoading = false;
+    render();
+  }
+}
+
+// Autofill helper for viva demonstration
+function fillLoginForm(email, password) {
+  state.loginForm.email = email;
+  state.loginForm.password = password;
+  state.loginError = null;
+  render();
+}
+
+// Backend User Registration
+async function handleRegisterUser(e) {
+  if (e) e.preventDefault();
+  const { name, email, password, role, phone } = state.registerForm;
+
+  if (!name.trim() || !email.trim() || !password) {
+    state.loginError = "Name, email, and password are required.";
+    render();
+    return;
+  }
+
+  state.loginLoading = true;
+  state.loginError = null;
+  render();
+
+  try {
+    const res = await fetch("/api/auth/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: name.trim(),
+        email: email.trim(),
+        password,
+        role,
+        phone: phone.trim()
+      })
+    });
+    const data = await res.json();
+
+    if (res.ok && data.success) {
+      state.token = data.token;
+      state.currentUser = data.user;
+      localStorage.setItem("eh_token", data.token);
+      localStorage.setItem("eh_user", JSON.stringify(data.user));
+      localStorage.removeItem("eh_logged_out");
+
+      state.registerForm.password = "";
+      playTone("success");
+      showToast(data.message || `Welcome, ${data.user.name}!`, "success");
+
+      if (data.user.role === "organizer") {
+        state.activeTab = "organizer";
+        loadOrganizerDashboard();
+      } else if (data.user.role === "operator") {
+        state.activeTab = "checkin";
+        loadCheckinStats(state.checkinEventId);
+      } else {
+        state.activeTab = "events";
+      }
+      loadEvents();
+    } else {
+      state.loginError = data.error || "Registration failed.";
+      playTone("error");
+    }
+  } catch (err) {
+    state.loginError = "Unable to connect to server.";
+    playTone("error");
+  } finally {
+    state.loginLoading = false;
+    render();
+  }
+}
+
+// Backend Logout & Invalidate Session
+async function handleLogout() {
+  try {
+    if (state.token) {
+      await fetch("/api/auth/logout", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${state.token}`
+        }
+      });
+    }
+  } catch (err) {
+    console.warn("Logout notification failed", err);
+  } finally {
+    state.token = null;
+    state.currentUser = null;
+    localStorage.removeItem("eh_token");
+    localStorage.removeItem("eh_user");
+    localStorage.setItem("eh_logged_out", "true");
+
+    state.myTickets = [];
+    state.organizerMetrics = null;
+    state.selectedEventAttendees = [];
+    state.activeTab = "events";
+    showToast("Signed out successfully.", "success");
+    render();
   }
 }
 
@@ -383,31 +584,71 @@ function render() {
           }">
             📊 Organizer Hub
           </button>
+          ${!state.currentUser ? `
+            <button onclick="setTab('login')" class="px-3.5 py-1.5 rounded-lg transition-all ${
+              state.activeTab === "login" ? "bg-indigo-600 text-white shadow-sm font-semibold" : "text-indigo-600 hover:text-indigo-800"
+            }">
+              🔑 Sign In
+            </button>
+          ` : ""}
         </nav>
 
-        <!-- 1-Click Role Switcher for Presentations -->
-        <div class="flex items-center gap-2 bg-slate-50 border border-slate-200 px-3 py-1.5 rounded-xl text-xs">
-          <span class="text-slate-500 font-semibold uppercase tracking-wider text-[10px]">Demo Role:</span>
-          <div class="flex items-center gap-1">
-            <button onclick="switchRole('attendee')" class="px-2 py-1 rounded font-medium ${
-              state.currentUser.role === "attendee" ? "bg-indigo-600 text-white shadow-sm" : "bg-white text-slate-700 hover:bg-slate-100"
-            }">
-              Attendee
-            </button>
-            <button onclick="switchRole('organizer')" class="px-2 py-1 rounded font-medium ${
-              state.currentUser.role === "organizer" ? "bg-indigo-600 text-white shadow-sm" : "bg-white text-slate-700 hover:bg-slate-100"
-            }">
-              Organizer
-            </button>
-            <button onclick="switchRole('operator')" class="px-2 py-1 rounded font-medium ${
-              state.currentUser.role === "operator" ? "bg-indigo-600 text-white shadow-sm" : "bg-white text-slate-700 hover:bg-slate-100"
-            }">
-              Gate Operator
+        <!-- Right Side: User Profile & Role Switcher or Sign In Button -->
+        ${state.currentUser ? `
+          <div class="flex flex-wrap items-center gap-2">
+            <!-- 1-Click Role Switcher for Presentations -->
+            <div class="flex items-center gap-1.5 bg-slate-50 border border-slate-200 px-3 py-1.5 rounded-xl text-xs">
+              <span class="text-slate-400 font-semibold uppercase tracking-wider text-[10px] hidden sm:inline">Role:</span>
+              <div class="flex items-center gap-1">
+                <button onclick="switchRole('attendee')" class="px-2 py-1 rounded font-medium transition-all ${
+                  state.currentUser.role === "attendee" ? "bg-indigo-600 text-white shadow-sm" : "bg-white text-slate-700 hover:bg-slate-100"
+                }">
+                  Attendee
+                </button>
+                <button onclick="switchRole('organizer')" class="px-2 py-1 rounded font-medium transition-all ${
+                  state.currentUser.role === "organizer" ? "bg-indigo-600 text-white shadow-sm" : "bg-white text-slate-700 hover:bg-slate-100"
+                }">
+                  Organizer
+                </button>
+                <button onclick="switchRole('operator')" class="px-2 py-1 rounded font-medium transition-all ${
+                  state.currentUser.role === "operator" ? "bg-indigo-600 text-white shadow-sm" : "bg-white text-slate-700 hover:bg-slate-100"
+                }">
+                  Operator
+                </button>
+              </div>
+              <div class="h-4 w-px bg-slate-200 mx-1"></div>
+              <div class="flex items-center gap-1.5">
+                <span class="font-bold text-slate-800 hidden md:inline">${state.currentUser.name}</span>
+                <span class="text-[10px] font-extrabold uppercase px-1.5 py-0.5 rounded ${
+                  state.currentUser.role === 'organizer' ? 'bg-indigo-100 text-indigo-700' :
+                  state.currentUser.role === 'operator' ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-700'
+                }">
+                  ${state.currentUser.role === 'organizer' ? '👑 Organizer' : state.currentUser.role === 'operator' ? '🛡️ Operator' : '👤 Attendee'}
+                </span>
+              </div>
+            </div>
+
+            <!-- Sign Out Button -->
+            <button
+              onclick="handleLogout()"
+              title="Sign out of EventHub"
+              class="px-3 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 text-xs font-bold transition-all flex items-center gap-1.5 shadow-xs"
+            >
+              <span>🚪</span>
+              <span class="hidden sm:inline">Sign Out</span>
             </button>
           </div>
-          <div class="h-4 w-px bg-slate-300 mx-1"></div>
-          <span class="font-semibold text-slate-800 hidden md:inline">${state.currentUser.name}</span>
-        </div>
+        ` : `
+          <div class="flex items-center gap-2">
+            <button
+              onclick="setTab('login')"
+              class="bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white text-xs font-bold px-4 py-2 rounded-xl shadow-md transition-all flex items-center gap-1.5"
+            >
+              <span>🔑</span>
+              <span>Sign In / Demo Login</span>
+            </button>
+          </div>
+        `}
       </div>
     </header>
 
@@ -445,8 +686,318 @@ function render() {
   attachPostRenderLogic();
 }
 
+// Render dedicated login & authentication view
+function renderLoginView() {
+  return `
+    <div class="max-w-xl mx-auto py-4 sm:py-8">
+      <!-- Main Auth Card -->
+      <div class="bg-white rounded-3xl border border-slate-200 shadow-xl overflow-hidden">
+        <!-- Hero Header -->
+        <div class="bg-gradient-to-r from-indigo-700 via-indigo-600 to-purple-600 p-8 text-white text-center relative overflow-hidden">
+          <div class="inline-flex w-16 h-16 rounded-2xl bg-white/20 backdrop-blur-md items-center justify-center text-3xl mb-3 shadow-inner">
+            🎟️
+          </div>
+          <h2 class="text-2xl font-black tracking-tight">EventHub Access Portal</h2>
+          <p class="text-xs text-indigo-100 mt-1">Multi-Role Authentication & Session Management</p>
+        </div>
+
+        <div class="p-6 sm:p-8 space-y-6">
+          <!-- Auth Mode Toggle -->
+          <div class="flex bg-slate-100 p-1.5 rounded-2xl text-xs font-bold">
+            <button
+              type="button"
+              onclick="setAuthMode('login')"
+              class="flex-1 py-2.5 rounded-xl transition-all ${
+                state.authMode === "login" ? "bg-white text-indigo-700 shadow-sm" : "text-slate-500 hover:text-slate-800"
+              }"
+            >
+              🔑 Sign In
+            </button>
+            <button
+              type="button"
+              onclick="setAuthMode('register')"
+              class="flex-1 py-2.5 rounded-xl transition-all ${
+                state.authMode === "register" ? "bg-white text-indigo-700 shadow-sm" : "text-slate-500 hover:text-slate-800"
+              }"
+            >
+              📝 Create Account
+            </button>
+          </div>
+
+          <!-- Error Alert Banner -->
+          ${state.loginError ? `
+            <div class="p-4 rounded-2xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold flex items-center gap-3 animate-pulse">
+              <span class="text-base">⚠️</span>
+              <span class="flex-1">${state.loginError}</span>
+            </div>
+          ` : ""}
+
+          ${state.authMode === "login" ? `
+            <!-- Login Form -->
+            <form onsubmit="handleLoginFormSubmit(event)" class="space-y-4">
+              <div>
+                <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                  Email Address *
+                </label>
+                <div class="relative">
+                  <input
+                    type="email"
+                    required
+                    placeholder="e.g. organizer@eventhub.io"
+                    value="${state.loginForm.email}"
+                    oninput="state.loginForm.email = this.value"
+                    class="w-full pl-10 pr-4 py-3 rounded-xl border border-slate-200 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                  <span class="absolute left-3.5 top-3.5 text-slate-400 text-sm">✉️</span>
+                </div>
+              </div>
+
+              <div>
+                <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                  Password *
+                </label>
+                <div class="relative">
+                  <input
+                    type="password"
+                    required
+                    placeholder="••••••••"
+                    value="${state.loginForm.password}"
+                    oninput="state.loginForm.password = this.value"
+                    class="w-full pl-10 pr-4 py-3 rounded-xl border border-slate-200 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                  <span class="absolute left-3.5 top-3.5 text-slate-400 text-sm">🔒</span>
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                ${state.loginLoading ? "disabled" : ""}
+                class="w-full py-3.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 active:scale-[0.99] text-white font-extrabold text-sm shadow-md transition-all flex items-center justify-center gap-2 ${
+                  state.loginLoading ? "opacity-75 cursor-not-allowed" : ""
+                }"
+              >
+                ${state.loginLoading ? `
+                  <div class="inline-block animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent"></div>
+                  <span>Verifying Credentials...</span>
+                ` : `
+                  <span>Sign In to EventHub</span>
+                  <span>→</span>
+                `}
+              </button>
+            </form>
+
+            <!-- 1-Click Demo Credentials for Live Viva / Faculty Presentation -->
+            <div class="pt-5 border-t border-slate-100">
+              <div class="flex items-center justify-between mb-3">
+                <span class="text-[11px] font-black text-slate-400 uppercase tracking-wider">
+                  💡 Presentation Test Accounts
+                </span>
+                <span class="text-[10px] text-indigo-600 font-bold bg-indigo-50 px-2 py-0.5 rounded-full">
+                  1-Click Autofill
+                </span>
+              </div>
+
+              <div class="space-y-2.5">
+                <!-- Organizer Card -->
+                <div class="p-3.5 rounded-2xl bg-indigo-50/70 border border-indigo-100 hover:border-indigo-300 transition-all flex items-center justify-between gap-3">
+                  <div class="min-w-0">
+                    <div class="flex items-center gap-2">
+                      <span class="text-base">👑</span>
+                      <span class="font-extrabold text-slate-900 text-xs">Event Organizer</span>
+                      <span class="text-[10px] px-1.5 py-0.2 rounded font-mono font-bold bg-indigo-200/60 text-indigo-800">organizer</span>
+                    </div>
+                    <div class="text-[11px] text-slate-500 font-mono mt-0.5 truncate">
+                      organizer@eventhub.io · pass123
+                    </div>
+                  </div>
+                  <div class="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onclick="fillCredentials('organizer@eventhub.io', 'pass123')"
+                      class="px-2.5 py-1.5 rounded-lg bg-white border border-indigo-200 text-indigo-700 hover:bg-indigo-50 text-[11px] font-bold shadow-xs transition-all"
+                      title="Fill into form inputs"
+                    >
+                      Autofill
+                    </button>
+                    <button
+                      type="button"
+                      onclick="instantLogin('organizer@eventhub.io', 'pass123')"
+                      class="px-2.5 py-1.5 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 text-[11px] font-bold shadow-sm transition-all"
+                      title="Direct login via backend API"
+                    >
+                      Login ⚡
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Gate Operator Card -->
+                <div class="p-3.5 rounded-2xl bg-emerald-50/70 border border-emerald-100 hover:border-emerald-300 transition-all flex items-center justify-between gap-3">
+                  <div class="min-w-0">
+                    <div class="flex items-center gap-2">
+                      <span class="text-base">🛡️</span>
+                      <span class="font-extrabold text-slate-900 text-xs">Gate Operator</span>
+                      <span class="text-[10px] px-1.5 py-0.2 rounded font-mono font-bold bg-emerald-200/60 text-emerald-800">operator</span>
+                    </div>
+                    <div class="text-[11px] text-slate-500 font-mono mt-0.5 truncate">
+                      operator@eventhub.io · pass123
+                    </div>
+                  </div>
+                  <div class="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onclick="fillCredentials('operator@eventhub.io', 'pass123')"
+                      class="px-2.5 py-1.5 rounded-lg bg-white border border-emerald-200 text-emerald-700 hover:bg-emerald-50 text-[11px] font-bold shadow-xs transition-all"
+                      title="Fill into form inputs"
+                    >
+                      Autofill
+                    </button>
+                    <button
+                      type="button"
+                      onclick="instantLogin('operator@eventhub.io', 'pass123')"
+                      class="px-2.5 py-1.5 rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 text-[11px] font-bold shadow-sm transition-all"
+                      title="Direct login via backend API"
+                    >
+                      Login ⚡
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Attendee Card -->
+                <div class="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 hover:border-slate-300 transition-all flex items-center justify-between gap-3">
+                  <div class="min-w-0">
+                    <div class="flex items-center gap-2">
+                      <span class="text-base">👤</span>
+                      <span class="font-extrabold text-slate-900 text-xs">Event Attendee</span>
+                      <span class="text-[10px] px-1.5 py-0.2 rounded font-mono font-bold bg-slate-200 text-slate-700">attendee</span>
+                    </div>
+                    <div class="text-[11px] text-slate-500 font-mono mt-0.5 truncate">
+                      attendee@eventhub.io · pass123
+                    </div>
+                  </div>
+                  <div class="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onclick="fillCredentials('attendee@eventhub.io', 'pass123')"
+                      class="px-2.5 py-1.5 rounded-lg bg-white border border-slate-300 text-slate-700 hover:bg-slate-100 text-[11px] font-bold shadow-xs transition-all"
+                      title="Fill into form inputs"
+                    >
+                      Autofill
+                    </button>
+                    <button
+                      type="button"
+                      onclick="instantLogin('attendee@eventhub.io', 'pass123')"
+                      class="px-2.5 py-1.5 rounded-lg bg-slate-800 text-white hover:bg-slate-900 text-[11px] font-bold shadow-sm transition-all"
+                      title="Direct login via backend API"
+                    >
+                      Login ⚡
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ` : `
+            <!-- Registration Form -->
+            <form onsubmit="handleRegisterSubmit(event)" class="space-y-4">
+              <div>
+                <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                  Full Name *
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Maya Lin"
+                  value="${state.registerForm.name}"
+                  oninput="state.registerForm.name = this.value"
+                  class="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                  Email Address *
+                </label>
+                <input
+                  type="email"
+                  required
+                  placeholder="e.g. maya@example.com"
+                  value="${state.registerForm.email}"
+                  oninput="state.registerForm.email = this.value"
+                  class="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                  Password *
+                </label>
+                <input
+                  type="password"
+                  required
+                  placeholder="Create a strong password"
+                  value="${state.registerForm.password}"
+                  oninput="state.registerForm.password = this.value"
+                  class="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                />
+              </div>
+
+              <div class="grid grid-cols-2 gap-3">
+                <div>
+                  <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                    Account Role *
+                  </label>
+                  <select
+                    value="${state.registerForm.role}"
+                    onchange="state.registerForm.role = this.value"
+                    class="w-full px-3 py-2.5 rounded-xl border border-slate-200 text-xs bg-white focus:ring-2 focus:ring-indigo-500 focus:outline-none font-semibold"
+                  >
+                    <option value="attendee">👤 Attendee</option>
+                    <option value="operator">🛡️ Gate Operator</option>
+                    <option value="organizer">👑 Event Organizer</option>
+                  </select>
+                </div>
+                <div>
+                  <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                    Phone (Optional)
+                  </label>
+                  <input
+                    type="tel"
+                    placeholder="+1 555-0199"
+                    value="${state.registerForm.phone}"
+                    oninput="state.registerForm.phone = this.value"
+                    class="w-full px-3 py-2.5 rounded-xl border border-slate-200 text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                ${state.loginLoading ? "disabled" : ""}
+                class="w-full py-3.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-sm shadow-md transition-all flex items-center justify-center gap-2 ${
+                  state.loginLoading ? "opacity-75 cursor-not-allowed" : ""
+                }"
+              >
+                ${state.loginLoading ? `
+                  <div class="inline-block animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent"></div>
+                  <span>Creating Account...</span>
+                ` : `
+                  <span>Register & Sign In</span>
+                  <span>→</span>
+                `}
+              </button>
+            </form>
+          `}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 // Render active tab view
 function renderActiveTab(filteredEvents) {
+  if (state.activeTab === "login") {
+    return renderLoginView();
+  }
+
   if (state.activeTab === "events") {
     return `
       <div class="space-y-6">
@@ -631,7 +1182,7 @@ function renderActiveTab(filteredEvents) {
                     <div class="sm:col-span-2 space-y-3 text-xs">
                       <div>
                         <span class="text-slate-400 block font-semibold">ATTENDEE NAME</span>
-                        <span class="text-base font-extrabold text-slate-900">${state.currentUser.name}</span>
+                        <span class="text-base font-extrabold text-slate-900">${state.currentUser ? state.currentUser.name : (ticket.attendee_name || "Guest Attendee")}</span>
                       </div>
                       <div>
                         <span class="text-slate-400 block font-semibold">DATE & VENUE</span>
@@ -921,7 +1472,7 @@ function renderActiveTab(filteredEvents) {
                       <button onclick="handleViewAttendees(${e.id})" class="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold px-3 py-1.5 rounded-lg transition-all">
                         Attendees (${e.registered_count})
                       </button>
-                      <a href="/api/organizer/export/${e.id}" class="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-3 py-1.5 rounded-lg transition-all inline-block">
+                      <a href="/api/organizer/export/${e.id}?token=${encodeURIComponent(state.token || '')}" class="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-3 py-1.5 rounded-lg transition-all inline-block">
                         CSV 📥
                       </a>
                     </td>
@@ -1248,6 +1799,25 @@ function attachPostRenderLogic() {
 
 // Global Event Dispatches
 window.setTab = function(tabName) {
+  // If user clicks a protected tab without being logged in:
+  if (!state.currentUser && (tabName === "my-tickets" || tabName === "organizer" || tabName === "checkin")) {
+    state.activeTab = "login";
+    state.loginError = `Please sign in to access ${tabName === "my-tickets" ? "your tickets" : tabName === "organizer" ? "the Organizer Hub" : "the Check-In Gate"}.`;
+    showToast("Authentication required", "warning");
+    render();
+    return;
+  }
+
+  // If attendee attempts to access organizer hub or checkin gate
+  if (state.currentUser && tabName === "organizer" && state.currentUser.role !== "organizer") {
+    showToast("Access restricted: Organizer role required. You can switch demo roles in the header.", "warning");
+    return;
+  }
+  if (state.currentUser && tabName === "checkin" && state.currentUser.role !== "operator" && state.currentUser.role !== "organizer") {
+    showToast("Access restricted: Gate Operator or Organizer role required.", "warning");
+    return;
+  }
+
   state.activeTab = tabName;
   if (tabName === "my-tickets") loadMyTickets();
   if (tabName === "organizer") loadOrganizerDashboard();
@@ -1280,6 +1850,13 @@ window.openCreateModal = function() {
 };
 
 window.registerForEvent = function(id) {
+  if (!state.currentUser) {
+    state.activeTab = "login";
+    state.loginError = "Please sign in or select a demo account to book event passes.";
+    showToast("Sign in required to register", "warning");
+    render();
+    return;
+  }
   handleRegister(id);
 };
 
@@ -1294,9 +1871,40 @@ window.handleSelectGateEvent = function(eventId) {
   loadCheckinStats(state.checkinEventId);
 };
 
+// Auth & Session Global Handlers
+window.fillCredentials = function(email, pass) {
+  fillLoginForm(email, pass);
+};
+
+window.instantLogin = function(email, pass) {
+  handleLogin(null, email, pass);
+};
+
+window.handleLoginFormSubmit = function(e) {
+  handleLogin(e);
+};
+
+window.handleRegisterSubmit = function(e) {
+  handleRegisterUser(e);
+};
+
+window.handleLogout = function() {
+  handleLogout();
+};
+
+window.setAuthMode = function(mode) {
+  state.authMode = mode;
+  state.loginError = null;
+  render();
+};
+
 // Initial Bootstrap on Page Load
 document.addEventListener("DOMContentLoaded", () => {
   loadEvents();
-  loadMyTickets();
-  loadCheckinStats(state.checkinEventId);
+  if (state.token && state.currentUser) {
+    loadMyTickets();
+    if (state.currentUser.role === "operator" || state.currentUser.role === "organizer") {
+      loadCheckinStats(state.checkinEventId);
+    }
+  }
 });

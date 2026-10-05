@@ -2,6 +2,7 @@
 EventHub - REST API Server
 Built using Python 3 ThreadingHTTPServer with zero external dependencies.
 Serves both REST endpoints and frontend single-page application.
+Provides secure authentication, authorization, error handling, and structured logging.
 """
 
 import os
@@ -29,10 +30,12 @@ from .auth import (
     register_user,
     create_session,
     get_user_from_token,
+    logout_user,
     seed_default_sessions,
     SESSIONS
 )
 from .external import geocode_address
+from .logger import logger
 
 FRONTEND_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend")
 
@@ -41,6 +44,10 @@ class EventHubAPIHandler(SimpleHTTPRequestHandler):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=FRONTEND_DIR, **kwargs)
+
+    def log_message(self, format, *args):
+        """Route standard HTTP server access logs to our structured logger."""
+        logger.info(f"[HTTP] {self.address_string()} - {format % args}")
 
     def _set_headers(self, status_code: int = 200, content_type: str = "application/json"):
         self.send_response(status_code)
@@ -57,6 +64,12 @@ class EventHubAPIHandler(SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
     def _send_error(self, message: str, status_code: int = 400):
+        if status_code >= 500:
+            logger.error(f"[API ERROR {status_code}] {message}")
+        elif status_code in (401, 403):
+            logger.warning(f"[API AUTH {status_code}] {message}")
+        else:
+            logger.warning(f"[API WARN {status_code}] {message}")
         self._send_json({"error": message, "success": False}, status_code=status_code)
 
     def _read_body_json(self) -> Dict[str, Any]:
@@ -69,8 +82,10 @@ class EventHubAPIHandler(SimpleHTTPRequestHandler):
         except json.JSONDecodeError:
             return {}
 
-    def _get_current_user(self) -> Optional[Dict[str, Any]]:
+    def _get_current_user(self, query: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
         auth_header = self.headers.get("Authorization", "")
+        if not auth_header and query:
+            auth_header = query.get("token", [""])[0]
         return get_user_from_token(auth_header)
 
     def do_OPTIONS(self):
@@ -83,288 +98,342 @@ class EventHubAPIHandler(SimpleHTTPRequestHandler):
 
         # Static assets routing: if not /api, delegate to SimpleHTTPRequestHandler
         if not path.startswith("/api/"):
-            # If path is root or HTML5 route, serve index.html
-            if path in ["", "/", "/events", "/my-tickets", "/organizer", "/checkin"]:
+            # If path is root or frontend route, serve index.html
+            if path in ["", "/", "/events", "/my-tickets", "/organizer", "/checkin", "/login"]:
                 self.path = "/index.html"
             return super().do_GET()
 
-        # ==========================================================
-        # REST API Routes (GET)
-        # ==========================================================
+        try:
+            # ==========================================================
+            # REST API Routes (GET)
+            # ==========================================================
 
-        # 1. Current Authenticated User Info
-        if path == "/api/auth/me":
-            user = self._get_current_user()
-            if not user:
-                return self._send_error("Unauthenticated", 401)
-            return self._send_json({"success": True, "user": user})
+            # 1. Current Authenticated User Info
+            if path == "/api/auth/me":
+                user = self._get_current_user()
+                if not user:
+                    return self._send_error("Unauthenticated. Please log in.", 401)
+                return self._send_json({"success": True, "user": user})
 
-        # 2. Get All Events (with optional category & search filter)
-        elif path == "/api/events":
-            category = query.get("category", [None])[0]
-            search = query.get("search", [None])[0]
-            events = get_all_events(category=category, search=search)
-            return self._send_json({"success": True, "count": len(events), "events": events})
+            # 2. Get All Events (Public: with optional category & search filter)
+            elif path == "/api/events":
+                category = query.get("category", [None])[0]
+                search = query.get("search", [None])[0]
+                events = get_all_events(category=category, search=search)
+                return self._send_json({"success": True, "count": len(events), "events": events})
 
-        # 3. Get Single Event Details
-        elif re.match(r"^/api/events/(\d+)$", path):
-            event_id = int(re.match(r"^/api/events/(\d+)$", path).group(1))
-            event = get_event_by_id(event_id)
-            if not event:
-                return self._send_error("Event not found", 404)
-            return self._send_json({"success": True, "event": event})
+            # 3. Get Single Event Details (Public)
+            elif re.match(r"^/api/events/(\d+)$", path):
+                event_id = int(re.match(r"^/api/events/(\d+)$", path).group(1))
+                event = get_event_by_id(event_id)
+                if not event:
+                    return self._send_error("Event not found", 404)
+                return self._send_json({"success": True, "event": event})
 
-        # 4. Get Current User's Registered Tickets
-        elif path == "/api/registrations/my":
-            user = self._get_current_user()
-            if not user:
-                return self._send_error("Please log in to view your tickets.", 401)
-            registrations = get_user_registrations(user["id"])
-            return self._send_json({"success": True, "registrations": registrations})
+            # 4. Get Current User's Registered Tickets (Protected: Authenticated Attendee/User)
+            elif path == "/api/registrations/my":
+                user = self._get_current_user()
+                if not user:
+                    return self._send_error("Unauthenticated. Please log in to view your tickets.", 401)
+                registrations = get_user_registrations(user["id"])
+                return self._send_json({"success": True, "registrations": registrations})
 
-        # 5. Get Live Check-in Stats for an Event
-        elif re.match(r"^/api/checkin/stats/(\d+)$", path):
-            event_id = int(re.match(r"^/api/checkin/stats/(\d+)$", path).group(1))
-            event = get_event_by_id(event_id)
-            if not event:
-                return self._send_error("Event not found", 404)
-            return self._send_json({
-                "success": True,
-                "stats": {
-                    "event_id": event["id"],
-                    "event_title": event["title"],
-                    "capacity": event["capacity"],
-                    "registered_count": event["registered_count"],
-                    "checked_in_count": event["checked_in_count"],
-                    "attendance_rate": round((event["checked_in_count"] / event["registered_count"] * 100), 1) if event["registered_count"] > 0 else 0.0,
-                    "remaining_spots": max(0, event["capacity"] - event["registered_count"])
-                }
-            })
+            # 5. Get Live Check-in Stats for an Event (Protected: Operator or Organizer)
+            elif re.match(r"^/api/checkin/stats/(\d+)$", path):
+                user = self._get_current_user()
+                if not user:
+                    return self._send_error("Unauthenticated. Please log in to view check-in stats.", 401)
+                if user["role"] not in ["operator", "organizer"]:
+                    return self._send_error("Access denied. Operator or Organizer role required.", 403)
 
-        # 6. Organizer Dashboard KPIs & Audit Logs
-        elif path == "/api/organizer/dashboard":
-            user = self._get_current_user()
-            if not user or user["role"] not in ["organizer", "operator"]:
-                return self._send_error("Access denied. Organizer or Operator role required.", 403)
-            metrics = get_organizer_metrics(user["id"])
-            return self._send_json({"success": True, "metrics": metrics})
+                event_id = int(re.match(r"^/api/checkin/stats/(\d+)$", path).group(1))
+                event = get_event_by_id(event_id)
+                if not event:
+                    return self._send_error("Event not found", 404)
+                return self._send_json({
+                    "success": True,
+                    "stats": {
+                        "event_id": event["id"],
+                        "event_title": event["title"],
+                        "capacity": event["capacity"],
+                        "registered_count": event["registered_count"],
+                        "checked_in_count": event["checked_in_count"],
+                        "attendance_rate": round((event["checked_in_count"] / event["registered_count"] * 100), 1) if event["registered_count"] > 0 else 0.0,
+                        "remaining_spots": max(0, event["capacity"] - event["registered_count"])
+                    }
+                })
 
-        # 7. Organizer Attendees for Event
-        elif re.match(r"^/api/organizer/attendees/(\d+)$", path):
-            event_id = int(re.match(r"^/api/organizer/attendees/(\d+)$", path).group(1))
-            user = self._get_current_user()
-            if not user or user["role"] not in ["organizer", "operator"]:
-                return self._send_error("Access denied.", 403)
-            attendees = get_event_attendees(event_id)
-            return self._send_json({"success": True, "attendees": attendees})
+            # 6. Organizer Dashboard KPIs & Audit Logs (Protected: Organizer or Operator)
+            elif path == "/api/organizer/dashboard":
+                user = self._get_current_user()
+                if not user:
+                    return self._send_error("Unauthenticated. Please log in to view organizer dashboard.", 401)
+                if user["role"] not in ["organizer", "operator"]:
+                    return self._send_error("Access denied. Organizer or Operator role required.", 403)
+                metrics = get_organizer_metrics(user["id"])
+                return self._send_json({"success": True, "metrics": metrics})
 
-        # 8. CSV Export for Attendees (Stretch Requirement)
-        elif re.match(r"^/api/organizer/export/(\d+)$", path):
-            event_id = int(re.match(r"^/api/organizer/export/(\d+)$", path).group(1))
-            event = get_event_by_id(event_id)
-            if not event:
-                return self._send_error("Event not found", 404)
-            attendees = get_event_attendees(event_id)
+            # 7. Organizer Attendees for Event (Protected: Organizer or Operator)
+            elif re.match(r"^/api/organizer/attendees/(\d+)$", path):
+                user = self._get_current_user()
+                if not user:
+                    return self._send_error("Unauthenticated. Please log in.", 401)
+                if user["role"] not in ["organizer", "operator"]:
+                    return self._send_error("Access denied. Organizer or Operator role required.", 403)
+                event_id = int(re.match(r"^/api/organizer/attendees/(\d+)$", path).group(1))
+                attendees = get_event_attendees(event_id)
+                return self._send_json({"success": True, "attendees": attendees})
 
-            # Build CSV string
-            csv_lines = ["Registration ID,Attendee Name,Email,Phone,Ticket Token,Registration Date,Checked In,Checkin Time"]
-            for a in attendees:
-                csv_lines.append(f'"{a["registration_id"]}","{a["attendee_name"]}","{a["attendee_email"]}","{a.get("phone") or ""}","{a["ticket_token"]}","{a["registered_at"]}","{"Yes" if a["is_checked_in"] else "No"}","{a.get("checkin_time") or ""}"')
-            csv_data = "\n".join(csv_lines).encode("utf-8")
+            # 8. CSV Export for Attendees (Protected: Organizer or Operator)
+            elif re.match(r"^/api/organizer/export/(\d+)$", path):
+                user = self._get_current_user(query)
+                if not user:
+                    return self._send_error("Unauthenticated. Please log in.", 401)
+                if user["role"] not in ["organizer", "operator"]:
+                    return self._send_error("Access denied. Organizer or Operator role required.", 403)
+                event_id = int(re.match(r"^/api/organizer/export/(\d+)$", path).group(1))
+                event = get_event_by_id(event_id)
+                if not event:
+                    return self._send_error("Event not found", 404)
+                attendees = get_event_attendees(event_id)
 
-            self.send_response(200)
-            self.send_header("Content-Type", "text/csv; charset=utf-8")
-            self.send_header("Content-Disposition", f'attachment; filename="event_{event_id}_attendees.csv"')
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(csv_data)
-            return
+                # Build CSV string
+                csv_lines = ["Registration ID,Attendee Name,Email,Phone,Ticket Token,Registration Date,Checked In,Checkin Time"]
+                for a in attendees:
+                    csv_lines.append(f'"{a["registration_id"]}","{a["attendee_name"]}","{a["attendee_email"]}","{a.get("phone") or ""}","{a["ticket_token"]}","{a["registered_at"]}","{"Yes" if a["is_checked_in"] else "No"}","{a.get("checkin_time") or ""}"')
+                csv_data = "\n".join(csv_lines).encode("utf-8")
 
-        # 9. External Geocoding Proxy (OpenStreetMap Nominatim)
-        elif path == "/api/external/geocode":
-            query_str = query.get("q", [""])[0]
-            if not query_str:
-                return self._send_error("Address query parameter 'q' is required.", 400)
-            result = geocode_address(query_str)
-            return self._send_json(result)
+                logger.info(f"[EXPORT] Generated attendee CSV for Event #{event_id} ('{event['title']}') requested by {user['name']}")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/csv; charset=utf-8")
+                self.send_header("Content-Disposition", f'attachment; filename="event_{event_id}_attendees.csv"')
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(csv_data)
+                return
 
-        # 10. Fallback for undefined API GET
-        return self._send_error(f"Endpoint GET {path} not found", 404)
+            # 9. External Geocoding Proxy (OpenStreetMap Nominatim)
+            elif path == "/api/external/geocode":
+                query_str = query.get("q", [""])[0]
+                if not query_str:
+                    return self._send_error("Address query parameter 'q' is required.", 400)
+                result = geocode_address(query_str)
+                return self._send_json(result)
+
+            # 10. Fallback for undefined API GET
+            return self._send_error(f"Endpoint GET {path} not found", 404)
+
+        except Exception as e:
+            logger.error(f"[SERVER] Unhandled exception processing GET {path}: {str(e)}", exc_info=True)
+            return self._send_error("An unexpected server error occurred.", 500)
 
     def do_POST(self):
         parsed = urlparse(self.path)
         path = parsed.path
         body = self._read_body_json()
 
-        # ==========================================================
-        # REST API Routes (POST)
-        # ==========================================================
+        try:
+            # ==========================================================
+            # REST API Routes (POST)
+            # ==========================================================
 
-        # 1. User Login
-        if path == "/api/auth/login":
-            email = body.get("email", "")
-            password = body.get("password", "")
-            user = authenticate_user(email, password)
-            if not user:
-                return self._send_error("Invalid email or password.", 401)
-            token = create_session(user)
-            return self._send_json({
-                "success": True,
-                "message": f"Welcome back, {user['name']}!",
-                "token": token,
-                "user": user
-            })
+            # 1. User Login (Authenticates credentials through backend)
+            if path == "/api/auth/login":
+                email = body.get("email", "")
+                password = body.get("password", "")
+                if not email or not password:
+                    return self._send_error("Email and password are required.", 400)
 
-        # 2. Demo Quick-Switch Role (Empowers painless 1-click viva presentation)
-        elif path == "/api/auth/demo-switch":
-            role = body.get("role", "attendee").lower()
-            demo_tokens = seed_default_sessions()
-            token = demo_tokens.get(role, "demo_attendee_token")
-            user = SESSIONS.get(token)
-            return self._send_json({
-                "success": True,
-                "message": f"Switched to demo role: {role.upper()}",
-                "token": token,
-                "user": user
-            })
+                user = authenticate_user(email, password)
+                if not user:
+                    return self._send_error("Invalid email or password.", 401)
 
-        # 3. User Registration
-        elif path == "/api/auth/register":
-            name = body.get("name")
-            email = body.get("email")
-            password = body.get("password")
-            role = body.get("role", "attendee")
-            phone = body.get("phone", "")
+                token = create_session(user)
+                return self._send_json({
+                    "success": True,
+                    "message": f"Welcome back, {user['name']}!",
+                    "token": token,
+                    "user": user
+                })
 
-            if not name or not email or not password:
-                return self._send_error("Name, email, and password are required.", 400)
+            # 2. User Logout (Invalidates active session)
+            elif path == "/api/auth/logout":
+                auth_header = self.headers.get("Authorization", "")
+                user = self._get_current_user()
+                if not user:
+                    return self._send_error("Unauthenticated. No active session found.", 401)
 
-            user = register_user(name, email, password, role, phone)
-            if not user:
-                return self._send_error("A user with this email already exists.", 409)
+                success = logout_user(auth_header)
+                return self._send_json({
+                    "success": True,
+                    "message": "Logged out successfully"
+                })
 
-            token = create_session(user)
-            return self._send_json({
-                "success": True,
-                "message": "Account created successfully!",
-                "token": token,
-                "user": user
-            }, 201)
+            # 3. Demo Quick-Switch Role (For rapid classroom viva presentations)
+            elif path == "/api/auth/demo-switch":
+                role = body.get("role", "attendee").lower()
+                demo_tokens = seed_default_sessions()
+                token = demo_tokens.get(role, "demo_attendee_token")
+                user = SESSIONS.get(token)
+                logger.info(f"[AUTH] Presentation quick-switch activated for demo role: '{role}'")
+                return self._send_json({
+                    "success": True,
+                    "message": f"Switched to demo role: {role.upper()}",
+                    "token": token,
+                    "user": user
+                })
 
-        # 4. Create New Event (Organizer Only)
-        elif path == "/api/events":
-            user = self._get_current_user()
-            if not user or user["role"] not in ["organizer"]:
-                return self._send_error("Unauthorized. Only Event Organizers can publish events.", 403)
+            # 4. User Registration (Public account creation)
+            elif path == "/api/auth/register":
+                name = body.get("name")
+                email = body.get("email")
+                password = body.get("password")
+                role = body.get("role", "attendee")
+                phone = body.get("phone", "")
 
-            required_fields = ["title", "description", "venue_name", "venue_address", "date_time", "capacity"]
-            for field in required_fields:
-                if not body.get(field):
-                    return self._send_error(f"Missing required field: '{field}'", 400)
+                if not name or not email or not password:
+                    return self._send_error("Name, email, and password are required.", 400)
 
-            try:
-                capacity = int(body["capacity"])
-                if capacity <= 0:
-                    return self._send_error("Event capacity must be greater than 0.", 400)
-            except ValueError:
-                return self._send_error("Capacity must be a positive integer.", 400)
+                user = register_user(name, email, password, role, phone)
+                if not user:
+                    return self._send_error("A user with this email already exists.", 409)
 
-            # Auto-geocode venue address if lat/lon not provided
-            if not body.get("latitude") or not body.get("longitude"):
-                geo = geocode_address(body["venue_address"])
-                if geo["success"]:
-                    body["latitude"] = geo["data"]["lat"]
-                    body["longitude"] = geo["data"]["lon"]
+                token = create_session(user)
+                return self._send_json({
+                    "success": True,
+                    "message": "Account created successfully!",
+                    "token": token,
+                    "user": user
+                }, 201)
 
-            new_event = create_event(body, organizer_id=user["id"])
-            return self._send_json({
-                "success": True,
-                "message": "Event published successfully!",
-                "event": new_event
-            }, 201)
+            # 5. Create New Event (Protected: Organizer Only)
+            elif path == "/api/events":
+                user = self._get_current_user()
+                if not user:
+                    return self._send_error("Unauthenticated. Please log in.", 401)
+                if user["role"] != "organizer":
+                    return self._send_error("Access denied. Only Event Organizers can publish events.", 403)
 
-        # 5. Register Attendee for Event
-        elif path == "/api/registrations":
-            user = self._get_current_user()
-            if not user:
-                return self._send_error("Please log in to register for an event.", 401)
+                required_fields = ["title", "description", "venue_name", "venue_address", "date_time", "capacity"]
+                for field in required_fields:
+                    if not body.get(field):
+                        return self._send_error(f"Missing required field: '{field}'", 400)
 
-            event_id = body.get("event_id")
-            if not event_id:
-                return self._send_error("Missing 'event_id' parameter.", 400)
-
-            success, message, reg_data = register_attendee(int(event_id), user["id"])
-            if not success:
-                return self._send_error(message, 400)
-
-            return self._send_json({
-                "success": True,
-                "message": message,
-                "registration": reg_data
-            }, 201)
-
-        # 6. Validate Check-in Token (Operator & Organizer)
-        elif path == "/api/checkin/validate":
-            user = self._get_current_user()
-            if not user or user["role"] not in ["operator", "organizer"]:
-                return self._send_error("Unauthorized. Operator or Organizer role required to check-in attendees.", 403)
-
-            token = body.get("token")
-            event_id = body.get("event_id")
-            if not token:
-                return self._send_error("Ticket token or QR payload string is required.", 400)
-
-            # If input is a raw JSON string from a QR code, extract the token field
-            if token.strip().startswith("{") and "token" in token:
                 try:
-                    payload = json.loads(token)
-                    token = payload.get("token", token)
-                except Exception:
-                    pass
+                    capacity = int(body["capacity"])
+                    if capacity <= 0:
+                        return self._send_error("Event capacity must be greater than 0.", 400)
+                except ValueError:
+                    return self._send_error("Capacity must be a positive integer.", 400)
 
-            code, message, details = validate_checkin(
-                token=token,
-                operator_id=user["id"],
-                target_event_id=int(event_id) if event_id else None
-            )
+                # Auto-geocode venue address if lat/lon not provided
+                if not body.get("latitude") or not body.get("longitude"):
+                    geo = geocode_address(body["venue_address"])
+                    if geo["success"]:
+                        body["latitude"] = geo["data"]["lat"]
+                        body["longitude"] = geo["data"]["lon"]
 
-            status_code = 200
-            if code == "INVALID_TOKEN":
-                status_code = 404
-            elif code == "ALREADY_CHECKED_IN":
-                status_code = 409
-            elif code == "EVENT_MISMATCH":
-                status_code = 400
+                new_event = create_event(body, organizer_id=user["id"])
+                logger.info(f"[EVENT] New event published by {user['name']}: '{new_event['title']}' (ID #{new_event['id']})")
+                return self._send_json({
+                    "success": True,
+                    "message": "Event published successfully!",
+                    "event": new_event
+                }, 201)
 
-            return self._send_json({
-                "success": (code == "SUCCESS"),
-                "status_code": code,
-                "message": message,
-                "details": details
-            }, status_code)
+            # 6. Register Attendee for Event (Protected: Authenticated Attendee/User)
+            elif path == "/api/registrations":
+                user = self._get_current_user()
+                if not user:
+                    return self._send_error("Unauthenticated. Please log in to register for an event.", 401)
 
-        # 7. Update Event Status (e.g., Close/Reopen event)
-        elif re.match(r"^/api/events/(\d+)/status$", path):
-            event_id = int(re.match(r"^/api/events/(\d+)/status$", path).group(1))
-            user = self._get_current_user()
-            if not user or user["role"] != "organizer":
-                return self._send_error("Unauthorized", 403)
+                event_id = body.get("event_id")
+                if not event_id:
+                    return self._send_error("Missing 'event_id' parameter.", 400)
 
-            new_status = body.get("status", "closed")
-            if new_status not in ["published", "closed", "draft"]:
-                return self._send_error("Invalid status value.", 400)
+                success, message, reg_data = register_attendee(int(event_id), user["id"])
+                if not success:
+                    return self._send_error(message, 400)
 
-            updated = update_event_status(event_id, new_status, user["id"])
-            return self._send_json({"success": updated, "message": f"Event status set to '{new_status}'"})
+                return self._send_json({
+                    "success": True,
+                    "message": message,
+                    "registration": reg_data
+                }, 201)
 
-        return self._send_error(f"Endpoint POST {path} not found", 404)
+            # 7. Validate Check-in Token (Protected: Operator or Organizer)
+            elif path == "/api/checkin/validate":
+                user = self._get_current_user()
+                if not user:
+                    return self._send_error("Unauthenticated. Please log in.", 401)
+                if user["role"] not in ["operator", "organizer"]:
+                    return self._send_error("Access denied. Operator or Organizer role required to check in attendees.", 403)
+
+                token = body.get("token")
+                event_id = body.get("event_id")
+                if not token:
+                    return self._send_error("Ticket token or QR payload string is required.", 400)
+
+                # If input is a raw JSON string from a QR code, extract the token field
+                if token.strip().startswith("{") and "token" in token:
+                    try:
+                        payload = json.loads(token)
+                        token = payload.get("token", token)
+                    except Exception:
+                        pass
+
+                code, message, details = validate_checkin(
+                    token=token,
+                    operator_id=user["id"],
+                    target_event_id=int(event_id) if event_id else None
+                )
+
+                status_code = 200
+                if code == "INVALID_TOKEN":
+                    status_code = 404
+                elif code == "ALREADY_CHECKED_IN":
+                    status_code = 409
+                elif code == "EVENT_MISMATCH":
+                    status_code = 400
+
+                return self._send_json({
+                    "success": (code == "SUCCESS"),
+                    "status_code": code,
+                    "message": message,
+                    "details": details
+                }, status_code)
+
+            # 8. Update Event Status (Protected: Organizer Only)
+            elif re.match(r"^/api/events/(\d+)/status$", path):
+                event_id = int(re.match(r"^/api/events/(\d+)/status$", path).group(1))
+                user = self._get_current_user()
+                if not user:
+                    return self._send_error("Unauthenticated. Please log in.", 401)
+                if user["role"] != "organizer":
+                    return self._send_error("Access denied. Only Organizer can update event status.", 403)
+
+                new_status = body.get("status", "closed")
+                if new_status not in ["published", "closed", "draft"]:
+                    return self._send_error("Invalid status value.", 400)
+
+                updated = update_event_status(event_id, new_status, user["id"])
+                logger.info(f"[EVENT] Status for Event #{event_id} changed to '{new_status}' by {user['name']}")
+                return self._send_json({"success": updated, "message": f"Event status set to '{new_status}'"})
+
+            return self._send_error(f"Endpoint POST {path} not found", 404)
+
+        except Exception as e:
+            logger.error(f"[SERVER] Unhandled exception processing POST {path}: {str(e)}", exc_info=True)
+            return self._send_error("An unexpected server error occurred.", 500)
 
 
 def run_server(host: str = "0.0.0.0", port: int = 8080):
     seed_default_sessions()
+    logger.info(f"[STARTUP] Starting EventHub ThreadingHTTPServer on {host}:{port}")
     server = ThreadingHTTPServer((host, port), EventHubAPIHandler)
+    logger.info(f"[STARTUP] EventHub Server is active and listening at http://{host}:{port}/")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        print("\nShutting down EventHub server...")
+        logger.info("[SHUTDOWN] KeyboardInterrupt received. Shutting down EventHub server...")
         server.shutdown()

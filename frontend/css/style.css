@@ -1,11 +1,10 @@
-/* EventHub Modern Stylesheet */
-@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
+/* EventHub Modern SaaS Stylesheet */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
 :root {
-  --primary: #4f46e5;
-  --primary-hover: #4338ca;
-  --primary-light: #eef2ff;
-  --accent: #06b6d4;
+  --primary: #ea580c; /* Orange 600 */
+  --primary-hover: #c2410c; /* Orange 700 */
+  --primary-light: #fff7ed; /* Orange 50 */
   --success: #10b981;
   --warning: #f59e0b;
   --danger: #ef4444;
@@ -18,7 +17,7 @@
 
 * {
   box-sizing: border-box;
-  font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 }
 
 body {
@@ -35,10 +34,10 @@ body {
 
 /* Glassmorphism Header */
 .glass-header {
-  background: rgba(255, 255, 255, 0.85);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border-bottom: 1px solid rgba(226, 232, 240, 0.8);
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border-bottom: 1px solid rgba(226, 232, 240, 0.9);
 }
 
 /* Boarding Pass Ticket Styling */
@@ -47,21 +46,21 @@ body {
   background: #ffffff;
   border-radius: 16px;
   overflow: hidden;
-  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.08), 0 8px 10px -6px rgba(0, 0, 0, 0.04);
+  box-shadow: 0 4px 12px -2px rgba(0, 0, 0, 0.05), 0 2px 4px -2px rgba(0, 0, 0, 0.03);
   border: 1px solid #e2e8f0;
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
 
 .ticket-card:hover {
-  transform: translateY(-3px);
-  box-shadow: 0 20px 30px -10px rgba(0, 0, 0, 0.12);
+  transform: translateY(-2px);
+  box-shadow: 0 10px 20px -3px rgba(0, 0, 0, 0.08);
 }
 
 .ticket-cutout-left, .ticket-cutout-right {
   position: absolute;
   top: 50%;
-  width: 24px;
-  height: 24px;
+  width: 22px;
+  height: 22px;
   background-color: #f8fafc;
   border-radius: 50%;
   transform: translateY(-50%);
@@ -69,45 +68,34 @@ body {
 }
 
 .ticket-cutout-left {
-  left: -12px;
-  box-shadow: inset -2px 0 3px rgba(0, 0, 0, 0.05);
+  left: -11px;
+  box-shadow: inset -2px 0 2px rgba(0, 0, 0, 0.04);
 }
 
 .ticket-cutout-right {
-  right: -12px;
-  box-shadow: inset 2px 0 3px rgba(0, 0, 0, 0.05);
+  right: -11px;
+  box-shadow: inset 2px 0 2px rgba(0, 0, 0, 0.04);
 }
 
 .ticket-perforation {
-  border-top: 2px dashed #cbd5e1;
+  border-top: 1.5px dashed #cbd5e1;
   position: relative;
   margin: 0.5rem 0;
 }
 
-/* Pulse animation for live check-in scanner */
-@keyframes radar {
-  0% { transform: scale(0.95); opacity: 0.8; }
-  50% { transform: scale(1.05); opacity: 0.3; }
-  100% { transform: scale(0.95); opacity: 0.8; }
-}
-
-.radar-scan {
-  animation: radar 2.5s infinite ease-in-out;
-}
-
 /* Badge styles */
-.badge-tech { background-color: #e0f2fe; color: #0284c7; }
-.badge-workshop { background-color: #fef3c7; color: #b45309; }
-.badge-cultural { background-color: #fce7f3; color: #be185d; }
-.badge-career { background-color: #dcfce7; color: #15803d; }
+.badge-tech { background-color: #fff7ed; color: #c2410c; border: 1px solid #ffedd5; }
+.badge-workshop { background-color: #f0fdf4; color: #15803d; border: 1px solid #dcfce7; }
+.badge-cultural { background-color: #fdf2f8; color: #be185d; border: 1px solid #fce7f3; }
+.badge-career { background-color: #f8fafc; color: #334155; border: 1px solid #e2e8f0; }
 
 /* Custom Scrollbar */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
 }
 ::-webkit-scrollbar-track {
-  background: #f1f5f9;
+  background: #f8fafc;
 }
 ::-webkit-scrollbar-thumb {
   background: #cbd5e1;
@@ -117,9 +105,9 @@ body {
   background: #94a3b8;
 }
 
-/* Leaflet Map Height */
+/* Leaflet Map */
 #map, .leaflet-container {
-  height: 240px;
+  height: 220px;
   width: 100%;
   border-radius: 12px;
   z-index: 1;
@@ -127,7 +115,7 @@ body {
 
 /* Print Ticket Styling */
 @media print {
-  header, footer, nav, button, .no-print {
+  header, footer, nav, button, .no-print, aside {
     display: none !important;
   }
   body {

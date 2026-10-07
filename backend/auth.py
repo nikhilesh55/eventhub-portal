@@ -7,6 +7,9 @@ import time
 import hashlib
 import json
 import base64
+import hmac
+import struct
+import secrets
 from typing import Optional, Dict, Any
 from .db import get_db_connection, hash_password
 from .logger import logger
@@ -61,7 +64,7 @@ def authenticate_user(email: str, password: str) -> Optional[Dict[str, Any]]:
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT id, name, email, password_hash, role
+        SELECT id, name, email, password_hash, role, totp_secret, is_2fa_enabled
         FROM users
         WHERE email = ?
     """, (clean_email,))
@@ -74,11 +77,14 @@ def authenticate_user(email: str, password: str) -> Optional[Dict[str, Any]]:
 
     if user["password_hash"] == hash_password(password):
         logger.info(f"[AUTH] Login successful: User '{user['name']}' verified (Role: {user['role']})")
+        user_keys = user.keys() if hasattr(user, "keys") else []
         return {
             "id": user["id"],
             "name": user["name"],
             "email": user["email"],
-            "role": user["role"]
+            "role": user["role"],
+            "is_2fa_enabled": bool(user["is_2fa_enabled"]) if "is_2fa_enabled" in user_keys else False,
+            "totp_secret": user["totp_secret"] if "totp_secret" in user_keys else None
         }
 
     logger.warning(f"[AUTH] Login failed: Invalid password supplied for email '{clean_email}'")
@@ -142,7 +148,7 @@ def authenticate_or_register_google_user(email: str, name: str = "", google_id: 
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT id, name, email, role
+        SELECT id, name, email, role, totp_secret, is_2fa_enabled
         FROM users
         WHERE email = ?
     """, (clean_email,))
@@ -151,19 +157,22 @@ def authenticate_or_register_google_user(email: str, name: str = "", google_id: 
     if user:
         conn.close()
         logger.info(f"[AUTH] Google sign-in successful: Existing user '{user['name']}' recognized (Role: {user['role']})")
+        user_keys = user.keys() if hasattr(user, "keys") else []
         return {
             "id": user["id"],
             "name": user["name"],
             "email": user["email"],
-            "role": user["role"]
+            "role": user["role"],
+            "is_2fa_enabled": bool(user["is_2fa_enabled"]) if "is_2fa_enabled" in user_keys else False,
+            "totp_secret": user["totp_secret"] if "totp_secret" in user_keys else None
         }
 
     # Auto-register new Google user with secure random password hash
     random_secret = hashlib.sha256(f"google_oauth_{clean_email}_{time.time()}".encode()).hexdigest()
     try:
         cursor.execute("""
-            INSERT INTO users (name, email, password_hash, role, phone)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO users (name, email, password_hash, role, phone, is_2fa_enabled)
+            VALUES (?, ?, ?, ?, ?, 0)
         """, (clean_name, clean_email, hash_password(random_secret), clean_role, ""))
         user_id = cursor.lastrowid
         conn.commit()
@@ -173,12 +182,143 @@ def authenticate_or_register_google_user(email: str, name: str = "", google_id: 
             "id": user_id,
             "name": clean_name,
             "email": clean_email,
-            "role": clean_role
+            "role": clean_role,
+            "is_2fa_enabled": False,
+            "totp_secret": None
         }
     except Exception as e:
         conn.close()
         logger.error(f"[AUTH] Failed to auto-provision Google user for '{clean_email}': {str(e)}")
         return None
+
+
+# ==========================================================
+# Google Authenticator (RFC 6238 TOTP 2FA Engine)
+# ==========================================================
+def generate_totp_secret() -> str:
+    """Generate a standard 16-character Base32 secret for Google Authenticator."""
+    chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+    return "".join(secrets.choice(chars) for _ in range(16))
+
+
+def get_totp_uri(secret: str, email: str, issuer: str = "EventHub") -> str:
+    """Generate the official otpauth:// URI that Google Authenticator scans."""
+    clean_email = email.strip()
+    return f"otpauth://totp/{issuer}:{clean_email}?secret={secret}&issuer={issuer}&algorithm=SHA1&digits=6&period=30"
+
+
+def get_current_totp(secret: str, interval: int = 30) -> str:
+    """Generate the current 6-digit TOTP code for a secret."""
+    try:
+        key = base64.b32decode(secret.strip().upper(), True)
+        counter = int(time.time() // interval)
+        msg = struct.pack(">Q", counter)
+        h = hmac.new(key, msg, hashlib.sha1).digest()
+        o = h[19] & 15
+        token = (struct.unpack(">I", h[o:o+4])[0] & 0x7fffffff) % 1000000
+        return f"{token:06d}"
+    except Exception:
+        return "000000"
+
+
+def verify_totp_code(secret: str, code: str, window: int = 1) -> bool:
+    """
+    Verify a 6-digit TOTP code against a Base32 secret.
+    Allows a time window of +/- 1 interval (30 seconds) to account for clock drift.
+    """
+    clean_code = str(code).strip()
+    if len(clean_code) != 6 or not clean_code.isdigit():
+        return False
+    if not secret:
+        return False
+
+    clean_secret = secret.strip().upper()
+    curr_counter = int(time.time() // 30)
+
+    for i in range(-window, window + 1):
+        msg = struct.pack(">Q", curr_counter + i)
+        try:
+            key = base64.b32decode(clean_secret, True)
+            h = hmac.new(key, msg, hashlib.sha1).digest()
+            o = h[19] & 15
+            val = (struct.unpack(">I", h[o:o+4])[0] & 0x7fffffff) % 1000000
+            if f"{val:06d}" == clean_code:
+                return True
+        except Exception:
+            return False
+    return False
+
+
+def get_user_2fa_status(user_id: int) -> Dict[str, Any]:
+    """Retrieve 2FA status and secret for a user."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, email, totp_secret, is_2fa_enabled FROM users WHERE id = ?", (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        return {"enabled": False, "secret": None}
+    row_keys = row.keys() if hasattr(row, "keys") else []
+    is_enabled = bool(row["is_2fa_enabled"]) if "is_2fa_enabled" in row_keys else False
+    secret = row["totp_secret"] if "totp_secret" in row_keys and is_enabled else None
+    return {
+        "enabled": is_enabled,
+        "secret": secret
+    }
+
+
+def enable_user_2fa(user_id: int, secret: str) -> bool:
+    """Persist and activate Google Authenticator 2FA for a user."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE users
+        SET totp_secret = ?, is_2fa_enabled = 1
+        WHERE id = ?
+    """, (secret.strip().upper(), user_id))
+    conn.commit()
+    conn.close()
+    logger.info(f"[AUTH] Google Authenticator 2FA activated for user ID #{user_id}")
+    return True
+
+
+def disable_user_2fa(user_id: int) -> bool:
+    """Deactivate Google Authenticator 2FA for a user."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE users
+        SET totp_secret = NULL, is_2fa_enabled = 0
+        WHERE id = ?
+    """, (user_id,))
+    conn.commit()
+    conn.close()
+    logger.info(f"[AUTH] Google Authenticator 2FA disabled for user ID #{user_id}")
+    return True
+
+
+def get_user_by_id(user_id: int) -> Optional[Dict[str, Any]]:
+    """Retrieve user dictionary by ID."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT id, name, email, role, totp_secret, is_2fa_enabled
+        FROM users
+        WHERE id = ?
+    """, (user_id,))
+    user = cursor.fetchone()
+    conn.close()
+    if not user:
+        return None
+    user_keys = user.keys() if hasattr(user, "keys") else []
+    return {
+        "id": user["id"],
+        "name": user["name"],
+        "email": user["email"],
+        "role": user["role"],
+        "is_2fa_enabled": bool(user["is_2fa_enabled"]) if "is_2fa_enabled" in user_keys else False,
+        "totp_secret": user["totp_secret"] if "totp_secret" in user_keys else None
+    }
 
 
 def seed_default_sessions():

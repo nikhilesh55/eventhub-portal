@@ -7,7 +7,7 @@ set -e
 
 echo "=================================================================="
 echo "  🎟️  EventHub: Event Booking & QR Check-In Portal"
-echo "  Project 08 · Industry Full-Stack Challenge"
+echo "  Project 05 · Industry Full-Stack Challenge"
 echo "=================================================================="
 
 # Check Python 3

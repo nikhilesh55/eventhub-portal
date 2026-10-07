@@ -40,7 +40,15 @@ from backend.auth import (
     parse_google_id_token,
     create_session,
     get_user_from_token,
-    logout_user
+    logout_user,
+    generate_totp_secret,
+    get_totp_uri,
+    get_current_totp,
+    verify_totp_code,
+    get_user_2fa_status,
+    enable_user_2fa,
+    disable_user_2fa,
+    get_user_by_id
 )
 from backend.external import geocode_address
 
@@ -256,6 +264,87 @@ class EventHubTestCase(unittest.TestCase):
         self.assertEqual(decoded.get("email"), "decoded@gmail.com")
         self.assertEqual(decoded.get("name"), "Decoded Name")
         self.assertEqual(decoded.get("sub"), "1234567890")
+
+    def test_19_totp_generation_and_verification(self):
+        """Verify RFC 6238 TOTP secret generation, URI format, and code verification."""
+        secret = generate_totp_secret()
+        self.assertEqual(len(secret), 16, "Secret should be 16 characters Base32")
+        self.assertTrue(all(c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567" for c in secret))
+
+        uri = get_totp_uri(secret, "user@example.com", issuer="EventHub")
+        self.assertTrue(uri.startswith("otpauth://totp/EventHub:user@example.com"))
+        self.assertIn(f"secret={secret}", uri)
+        self.assertIn("issuer=EventHub", uri)
+        self.assertIn("digits=6", uri)
+        self.assertIn("period=30", uri)
+
+        # Generate live TOTP code
+        code = get_current_totp(secret)
+        self.assertEqual(len(code), 6)
+        self.assertTrue(code.isdigit())
+
+        # Verify valid code
+        self.assertTrue(verify_totp_code(secret, code), "Current code should verify as valid")
+
+        # Verify invalid code
+        invalid_code = "000000" if code != "000000" else "999999"
+        self.assertFalse(verify_totp_code(secret, invalid_code), "Random invalid code should fail verification")
+
+    def test_20_user_2fa_enable_and_disable(self):
+        """Verify enabling, querying, and disabling Google Authenticator 2FA in database."""
+        # Create a dedicated user
+        user = register_user("2FA Test User", "totp_user@eventhub.io", "pass123", "attendee", "555-0199")
+        self.assertIsNotNone(user)
+        user_id = user["id"]
+
+        # Initial status should be disabled
+        status = get_user_2fa_status(user_id)
+        self.assertFalse(status["enabled"])
+        self.assertIsNone(status["secret"])
+
+        # Enable 2FA
+        secret = generate_totp_secret()
+        success = enable_user_2fa(user_id, secret)
+        self.assertTrue(success)
+
+        # Status should now be enabled with secret
+        status_after = get_user_2fa_status(user_id)
+        self.assertTrue(status_after["enabled"])
+        self.assertEqual(status_after["secret"], secret)
+
+        # Disable 2FA
+        disable_success = disable_user_2fa(user_id)
+        self.assertTrue(disable_success)
+
+        # Status should be disabled again
+        status_disabled = get_user_2fa_status(user_id)
+        self.assertFalse(status_disabled["enabled"])
+        self.assertIsNone(status_disabled["secret"])
+
+    def test_21_login_with_2fa_required(self):
+        """Verify that login flags accounts with 2FA enabled, and code validation confirms identity."""
+        # Create user and enable 2FA
+        user = register_user("Secure Admin", "secure_admin@eventhub.io", "securepass123", "organizer", "")
+        self.assertIsNotNone(user)
+        user_id = user["id"]
+
+        secret = generate_totp_secret()
+        enable_user_2fa(user_id, secret)
+
+        # Attempt login with password
+        auth_user = authenticate_user("secure_admin@eventhub.io", "securepass123")
+        self.assertIsNotNone(auth_user)
+        self.assertTrue(auth_user.get("is_2fa_enabled"), "is_2fa_enabled must be True")
+
+        # Verify code
+        code = get_current_totp(secret)
+        self.assertTrue(verify_totp_code(auth_user["totp_secret"], code))
+
+        # Session creation after 2FA validation
+        session_token = create_session(auth_user)
+        self.assertIsNotNone(session_token)
+        recovered_user = get_user_from_token(session_token)
+        self.assertEqual(recovered_user["email"], "secure_admin@eventhub.io")
 
 
 if __name__ == "__main__":

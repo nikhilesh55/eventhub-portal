@@ -42,9 +42,19 @@ def init_db():
         password_hash TEXT NOT NULL,
         role TEXT NOT NULL CHECK(role IN ('organizer', 'operator', 'attendee')),
         phone TEXT,
+        totp_secret TEXT DEFAULT NULL,
+        is_2fa_enabled INTEGER DEFAULT 0,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
     """)
+
+    # Ensure 2FA columns exist for existing databases
+    cursor.execute("PRAGMA table_info(users);")
+    user_cols = [row["name"] for row in cursor.fetchall()]
+    if "totp_secret" not in user_cols:
+        cursor.execute("ALTER TABLE users ADD COLUMN totp_secret TEXT DEFAULT NULL;")
+    if "is_2fa_enabled" not in user_cols:
+        cursor.execute("ALTER TABLE users ADD COLUMN is_2fa_enabled INTEGER DEFAULT 0;")
 
     # 2. Events Table
     cursor.execute("""

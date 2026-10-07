@@ -1,5 +1,5 @@
 # 🎤 EventHub: Complete Presentation & Viva Guide
-> **Industry Full-Stack Project Challenge · Project 08: Event Booking & QR Check-In Portal**  
+> **Industry Full-Stack Project Challenge · Project 05: Event Booking & QR Check-In Portal**  
 > Use this comprehensive guide to deliver a top-scoring classroom or viva presentation.
 
 ---
@@ -20,7 +20,7 @@
 
 ### Slide 1: Title & Team Introduction
 - **Slide Title**: EventHub — Event Booking & QR Check-In Portal
-- **Subtitle**: Industry Full-Stack Project Challenge · Project 08
+- **Subtitle**: Industry Full-Stack Project Challenge · Project 05
 - **Speaker Script**:
   > *"Good morning respected professor and evaluators. Today, I am proud to present **EventHub**, an end-to-end full-stack event booking and QR check-in platform designed according to the Industry Full-Stack Project Challenge specification. Our mission with EventHub is to provide a complete, lightweight, zero-cost operational tool for campus hackathons, technical conferences, and workshops that guarantees strict capacity control and eliminates entrance gate bottlenecks using digital QR verification."*
 
@@ -146,9 +146,9 @@ Follow this exact sequence during your live presentation for maximum impact:
 
 ## ❓ 4. Top 10 Viva & Professor Questions (With Model Answers)
 
-### Q1: Why did you choose Project 08 (EventHub) from the Google Drive list?
+### Q1: Why did you choose Project 05 (EventHub) from the Google Drive list?
 **Answer**:
-> *"We selected Project 08 because it represents a complete, real-world operational workflow that can be proven end-to-end. It features multi-role permissions (Attendee, Organizer, Gate Operator), complex relational constraints, scannable QR verification, live external mapping, and security auditing, while remaining intuitive and impressive during a live demonstration."*
+> *"We selected Project 05 because it represents a complete, real-world operational workflow that can be proven end-to-end. It features multi-role permissions (Attendee, Organizer, Gate Operator), complex relational constraints, scannable QR verification, live external mapping, and security auditing, while remaining intuitive and impressive during a live demonstration."*
 
 ---
 

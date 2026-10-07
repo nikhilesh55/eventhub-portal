@@ -68,7 +68,17 @@ const state = {
   showGoogleModal: false,
   googleSelectedRole: "attendee",
   customGoogleEmail: "",
-  customGoogleName: ""
+  customGoogleName: "",
+  // Google Authenticator & 2FA State
+  showTwoFactorModal: false,
+  twoFactorStatus: { enabled: false, has_secret: false },
+  twoFactorSetupData: null,
+  twoFactorInputCode: "",
+  twoFactorLoading: false,
+  twoFactorError: null,
+  twoFactorSuccess: null,
+  twoFactorPending: null, // { user_id, email, name, role }
+  twoFactorLoginCode: ""
 };
 
 // Web Audio API Synthesizer for instant audible gate feedback
@@ -253,6 +263,21 @@ async function handleLogin(e, overrideEmail, overridePass) {
     const data = await res.json();
 
     if (res.ok && data.success) {
+      if (data.requires_2fa) {
+        state.twoFactorPending = {
+          user_id: data.user_id,
+          email: data.email,
+          name: data.name,
+          role: data.role
+        };
+        state.loginError = null;
+        state.twoFactorLoginCode = "";
+        playTone("warning");
+        showToast("Two-Factor Authentication required. Enter code from Google Authenticator.", "warning");
+        render();
+        return;
+      }
+
       state.token = data.token;
       state.currentUser = data.user;
       localStorage.setItem("eh_token", data.token);
@@ -408,6 +433,22 @@ async function handleGoogleSignIn(payload) {
     const data = await res.json();
 
     if (res.ok && data.success) {
+      if (data.requires_2fa) {
+        state.showGoogleModal = false;
+        state.twoFactorPending = {
+          user_id: data.user_id,
+          email: data.email,
+          name: data.name,
+          role: data.role
+        };
+        state.loginError = null;
+        state.twoFactorLoginCode = "";
+        playTone("warning");
+        showToast("Two-Factor Authentication required for this Google Account.", "warning");
+        render();
+        return;
+      }
+
       state.token = data.token;
       state.currentUser = data.user;
       localStorage.setItem("eh_token", data.token);
@@ -440,6 +481,253 @@ async function handleGoogleSignIn(payload) {
   } finally {
     state.loginLoading = false;
     render();
+  }
+}
+
+// ==========================================================
+// Google Authenticator & 2FA Engine (Frontend)
+// ==========================================================
+
+async function openTwoFactorModal() {
+  if (!state.currentUser) {
+    showToast("Please log in to manage two-factor authentication.", "warning");
+    return;
+  }
+  state.showTwoFactorModal = true;
+  state.twoFactorError = null;
+  state.twoFactorSuccess = null;
+  state.twoFactorInputCode = "";
+  state.twoFactorLoading = true;
+  render();
+
+  try {
+    const res = await fetch("/api/auth/2fa/status", {
+      headers: { Authorization: `Bearer ${state.token}` }
+    });
+    const data = await res.json();
+    if (res.ok && data.success) {
+      state.twoFactorStatus = { enabled: !!data.enabled, has_secret: !!data.has_secret };
+      state.currentUser.is_2fa_enabled = !!data.enabled;
+      if (!data.enabled) {
+        await fetchTwoFactorSetup();
+      }
+    }
+  } catch (e) {
+    state.twoFactorError = "Failed to load 2FA status from server.";
+  } finally {
+    state.twoFactorLoading = false;
+    render();
+  }
+}
+
+function closeTwoFactorModal() {
+  state.showTwoFactorModal = false;
+  state.twoFactorError = null;
+  state.twoFactorSuccess = null;
+  render();
+}
+
+async function fetchTwoFactorSetup() {
+  state.twoFactorLoading = true;
+  render();
+  try {
+    const res = await fetch("/api/auth/2fa/setup", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${state.token}`
+      }
+    });
+    const data = await res.json();
+    if (res.ok && data.success) {
+      state.twoFactorSetupData = data;
+    } else {
+      state.twoFactorError = data.error || "Failed to generate Google Authenticator secret.";
+    }
+  } catch (e) {
+    state.twoFactorError = "Network error communicating with 2FA service.";
+  } finally {
+    state.twoFactorLoading = false;
+    render();
+  }
+}
+
+async function handleEnableTwoFactor(codeOverride) {
+  const code = (codeOverride || state.twoFactorInputCode || "").trim();
+  if (!code || code.length !== 6) {
+    state.twoFactorError = "Please enter the 6-digit code shown in Google Authenticator.";
+    render();
+    return;
+  }
+  if (!state.twoFactorSetupData || !state.twoFactorSetupData.secret) {
+    state.twoFactorError = "Setup session expired. Please refresh the QR code.";
+    render();
+    return;
+  }
+
+  state.twoFactorLoading = true;
+  state.twoFactorError = null;
+  render();
+
+  try {
+    const res = await fetch("/api/auth/2fa/enable", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${state.token}`
+      },
+      body: JSON.stringify({
+        secret: state.twoFactorSetupData.secret,
+        code
+      })
+    });
+    const data = await res.json();
+    if (res.ok && data.success) {
+      state.twoFactorStatus = { enabled: true, has_secret: true };
+      state.currentUser.is_2fa_enabled = true;
+      localStorage.setItem("eh_user", JSON.stringify(state.currentUser));
+      state.twoFactorSuccess = "Google Authenticator is now active! Your account is securely protected.";
+      playTone("success");
+      showToast("Google Authenticator 2FA enabled!", "success");
+    } else {
+      state.twoFactorError = data.error || "Invalid 6-digit code. Please verify against Google Authenticator.";
+      playTone("error");
+    }
+  } catch (e) {
+    state.twoFactorError = "Connection error. Unable to verify 2FA code.";
+    playTone("error");
+  } finally {
+    state.twoFactorLoading = false;
+    render();
+  }
+}
+
+async function handleDisableTwoFactor() {
+  if (!confirm("Are you sure you want to disable Google Authenticator 2FA? This will reduce your account security.")) {
+    return;
+  }
+
+  state.twoFactorLoading = true;
+  state.twoFactorError = null;
+  render();
+
+  try {
+    const res = await fetch("/api/auth/2fa/disable", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${state.token}`
+      }
+    });
+    const data = await res.json();
+    if (res.ok && data.success) {
+      state.twoFactorStatus = { enabled: false, has_secret: false };
+      state.currentUser.is_2fa_enabled = false;
+      localStorage.setItem("eh_user", JSON.stringify(state.currentUser));
+      state.twoFactorSetupData = null;
+      state.twoFactorSuccess = null;
+      playTone("warning");
+      showToast("Google Authenticator 2FA disabled.", "warning");
+      await fetchTwoFactorSetup();
+    } else {
+      state.twoFactorError = data.error || "Failed to disable 2FA.";
+    }
+  } catch (e) {
+    state.twoFactorError = "Connection error disabling 2FA.";
+  } finally {
+    state.twoFactorLoading = false;
+    render();
+  }
+}
+
+async function handleTwoFactorLoginSubmit(e) {
+  if (e) e.preventDefault();
+  if (!state.twoFactorPending) return;
+
+  const codeInput = document.getElementById("twofactor-code-input");
+  const code = (codeInput ? codeInput.value : state.twoFactorLoginCode || "").trim();
+
+  if (!code || code.length !== 6) {
+    state.loginError = "Please enter the 6-digit verification code from Google Authenticator.";
+    render();
+    return;
+  }
+
+  state.loginLoading = true;
+  state.loginError = null;
+  render();
+
+  try {
+    const res = await fetch("/api/auth/2fa/validate-login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        user_id: state.twoFactorPending.user_id,
+        code
+      })
+    });
+    const data = await res.json();
+
+    if (res.ok && data.success) {
+      state.token = data.token;
+      state.currentUser = data.user;
+      localStorage.setItem("eh_token", data.token);
+      localStorage.setItem("eh_user", JSON.stringify(data.user));
+      localStorage.removeItem("eh_logged_out");
+      state.twoFactorPending = null;
+      state.twoFactorLoginCode = "";
+
+      playTone("success");
+      showToast(data.message || `Welcome back, ${data.user.name}!`, "success");
+
+      if (data.user.role === "organizer") {
+        state.activeTab = "organizer";
+        loadOrganizerDashboard();
+      } else if (data.user.role === "operator") {
+        state.activeTab = "checkin";
+        loadCheckinStats(state.checkinEventId);
+      } else {
+        state.activeTab = "my-tickets";
+        loadMyTickets();
+      }
+      loadEvents();
+    } else {
+      state.loginError = data.error || "Invalid verification code. Please check your Google Authenticator app.";
+      playTone("error");
+    }
+  } catch (err) {
+    state.loginError = "Unable to connect to authentication server.";
+    playTone("error");
+  } finally {
+    state.loginLoading = false;
+    render();
+  }
+}
+
+function cancelTwoFactorLogin() {
+  state.twoFactorPending = null;
+  state.loginError = null;
+  state.twoFactorLoginCode = "";
+  render();
+}
+
+async function autoFillCurrentTotp() {
+  if (!state.twoFactorPending) return;
+  try {
+    const res = await fetch("/api/auth/2fa/demo-code", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ user_id: state.twoFactorPending.user_id })
+    });
+    const data = await res.json();
+    if (res.ok && data.success && data.code) {
+      const codeInput = document.getElementById("twofactor-code-input");
+      if (codeInput) codeInput.value = data.code;
+      state.twoFactorLoginCode = data.code;
+      showToast(`Current Google Authenticator Code: ${data.code}`, "success");
+    }
+  } catch (e) {
+    showToast("Unable to fetch code automatically", "warning");
   }
 }
 
@@ -606,6 +894,7 @@ function render() {
     root.innerHTML = `
       ${renderLoginView()}
       ${renderGoogleModal()}
+      ${renderTwoFactorModal()}
       ${state.toast ? `
         <div class="fixed top-4 right-4 z-50 px-4 py-3 rounded-lg shadow-lg flex items-center gap-2.5 text-white font-medium text-xs transition-all ${
           state.toast.type === "success" ? "bg-emerald-600" : state.toast.type === "warning" ? "bg-amber-600" : "bg-rose-600"
@@ -732,6 +1021,23 @@ function render() {
                   </div>
                 </div>
               </div>
+
+              <button
+                type="button"
+                onclick="openTwoFactorModal()"
+                class="w-full py-1.5 px-3 rounded-lg border border-slate-200 hover:border-orange-300 bg-white hover:bg-orange-50/50 text-slate-700 text-xs font-medium transition-colors flex items-center justify-between cursor-pointer shadow-2xs"
+                title="Configure Google Authenticator 2FA"
+              >
+                <span class="flex items-center gap-1.5">
+                  <span>🔐</span>
+                  <span>Google 2FA</span>
+                </span>
+                <span class="text-[9px] font-bold px-1.5 py-0.2 rounded-full ${
+                  state.currentUser.is_2fa_enabled ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' : 'bg-slate-100 text-slate-500'
+                }">
+                  ${state.currentUser.is_2fa_enabled ? 'Active' : 'Setup'}
+                </span>
+              </button>
 
               <button
                 onclick="handleLogout()"
@@ -864,6 +1170,20 @@ function render() {
                 </button>
               </div>
 
+              <!-- 2FA Authenticator Button -->
+              <button
+                type="button"
+                onclick="openTwoFactorModal()"
+                class="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium border border-slate-200 hover:border-orange-300 hover:bg-orange-50/50 text-slate-700 transition-colors cursor-pointer"
+                title="Manage Google Authenticator Two-Factor Authentication"
+              >
+                <span>🔐</span>
+                <span class="hidden md:inline">2FA</span>
+                <span class="w-2 h-2 rounded-full ${
+                  state.currentUser.is_2fa_enabled ? 'bg-emerald-500' : 'bg-slate-300'
+                }"></span>
+              </button>
+
               <!-- Compact Role Badge -->
               <div class="hidden sm:flex items-center gap-2 pl-2 border-l border-slate-200">
                 <div class="w-8 h-8 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center font-bold text-xs text-slate-700">
@@ -900,11 +1220,12 @@ function render() {
         ${state.selectedEvent ? renderEventModal(state.selectedEvent) : ""}
         ${state.showCreateModal ? renderCreateEventModal() : ""}
         ${renderGoogleModal()}
+        ${renderTwoFactorModal()}
 
         <!-- SaaS Minimal Footer -->
         <footer class="bg-white border-t border-slate-200 py-4 px-6 sm:px-8 text-xs text-slate-500">
           <div class="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-2">
-            <span>EventHub · Modern SaaS Event Management Platform · Project 08</span>
+            <span>EventHub · Modern SaaS Event Management Platform · Project 05</span>
             <span class="text-slate-400 font-mono text-[11px]">REST API • SQLite Relational DB • OpenStreetMap</span>
           </div>
         </footer>
@@ -988,6 +1309,7 @@ function renderLoginView() {
               <span class="text-xs font-semibold px-2 py-0.5 rounded-full bg-orange-50 text-orange-700 border border-orange-200">SaaS</span>
             </div>
 
+            ${state.twoFactorPending ? renderTwoFactorChallenge() : `
             <div>
               <h1 class="text-2xl font-bold tracking-tight text-slate-900">Welcome back</h1>
               <p class="text-xs text-slate-500 mt-1">Sign in to your EventHub dashboard to manage events and check-ins</p>
@@ -1298,8 +1620,89 @@ function renderLoginView() {
                 </div>
               </form>
             `}
+            `}
           </div>
         </div>
+      </div>
+    </div>
+  `;
+}
+
+// Render Two-Factor Authentication Challenge Form
+function renderTwoFactorChallenge() {
+  return `
+    <div class="space-y-5">
+      <div class="text-center space-y-1.5">
+        <div class="w-12 h-12 mx-auto rounded-xl bg-orange-50 border border-orange-200 flex items-center justify-center text-xl shadow-xs">
+          🔐
+        </div>
+        <h2 class="text-xl font-bold text-slate-900 tracking-tight">Two-Factor Authentication</h2>
+        <p class="text-xs text-slate-500 leading-relaxed">
+          Open <strong class="text-slate-800">Google Authenticator</strong> and enter the 6-digit verification code for
+          <span class="font-mono text-slate-800 font-semibold block mt-0.5">${state.twoFactorPending.email}</span>
+        </p>
+      </div>
+
+      ${state.loginError ? `
+        <div class="p-3 rounded-lg bg-rose-50 border border-rose-200 text-rose-800 text-xs font-medium flex items-center gap-2">
+          <span>⚠️</span>
+          <span class="flex-1">${state.loginError}</span>
+        </div>
+      ` : ""}
+
+      <form onsubmit="handleTwoFactorLoginSubmit(event)" class="space-y-4">
+        <div>
+          <label class="block text-xs font-semibold text-slate-700 mb-1.5 text-center">
+            Enter 6-Digit Authenticator Code
+          </label>
+          <input
+            type="text"
+            id="twofactor-code-input"
+            inputmode="numeric"
+            maxlength="6"
+            pattern="[0-9]{6}"
+            required
+            autocomplete="one-time-code"
+            placeholder="000000"
+            value="${state.twoFactorLoginCode}"
+            oninput="state.twoFactorLoginCode = this.value"
+            autofocus
+            class="w-full text-center text-2xl tracking-[0.4em] font-mono font-bold py-3 px-4 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 bg-white"
+          />
+        </div>
+
+        <button
+          type="submit"
+          class="w-full py-2.5 px-4 rounded-lg bg-orange-600 hover:bg-orange-700 active:bg-orange-800 text-white font-semibold text-xs shadow-sm transition-colors flex items-center justify-center gap-2 cursor-pointer ${
+            state.loginLoading ? "opacity-75 cursor-not-allowed" : ""
+          }"
+        >
+          ${state.loginLoading ? `
+            <div class="inline-block animate-spin rounded-full h-3.5 w-3.5 border-2 border-white border-t-transparent"></div>
+            <span>Verifying with Google Authenticator...</span>
+          ` : `
+            <span>Verify & Access EventHub</span>
+            <span>→</span>
+          `}
+        </button>
+      </form>
+
+      <div class="pt-3 border-t border-slate-100 flex items-center justify-between text-xs">
+        <button
+          type="button"
+          onclick="cancelTwoFactorLogin()"
+          class="text-slate-500 hover:text-slate-800 font-medium cursor-pointer"
+        >
+          ← Back to Login
+        </button>
+        <button
+          type="button"
+          onclick="autoFillCurrentTotp()"
+          class="text-orange-700 bg-orange-50 hover:bg-orange-100 border border-orange-200 px-2.5 py-1 rounded-md font-semibold text-[11px] transition-colors cursor-pointer"
+          title="Retrieve the active code directly from server for instant presentation demonstration"
+        >
+          ⚡ Auto-Fill Code (Viva Test)
+        </button>
       </div>
     </div>
   `;
@@ -2320,6 +2723,168 @@ function renderGoogleModal() {
   `;
 }
 
+// Render Google Authenticator 2FA Modal
+function renderTwoFactorModal() {
+  if (!state.showTwoFactorModal) return "";
+
+  const isEnabled = !!(state.currentUser && state.currentUser.is_2fa_enabled);
+
+  return `
+    <div class="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
+      <div class="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl space-y-5 relative border border-slate-200">
+        <!-- Close button -->
+        <button
+          onclick="closeTwoFactorModal()"
+          class="absolute top-4 right-4 w-7 h-7 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 font-bold flex items-center justify-center transition-all cursor-pointer text-xs"
+        >
+          ✕
+        </button>
+
+        <!-- Header -->
+        <div class="flex items-center gap-3">
+          <div class="w-10 h-10 rounded-xl bg-orange-50 border border-orange-200 flex items-center justify-center text-xl shrink-0">
+            🔐
+          </div>
+          <div>
+            <div class="flex items-center gap-2">
+              <h3 class="text-base font-bold text-slate-900">Google Authenticator (2FA)</h3>
+              <span class="text-[10px] font-semibold px-2 py-0.5 rounded-full ${
+                isEnabled ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' : 'bg-slate-100 text-slate-600'
+              }">
+                ${isEnabled ? "Active" : "Not Configured"}
+              </span>
+            </div>
+            <p class="text-xs text-slate-500">RFC 6238 Time-Based One-Time Password (TOTP) Security</p>
+          </div>
+        </div>
+
+        ${state.twoFactorError ? `
+          <div class="p-3 rounded-lg bg-rose-50 border border-rose-200 text-rose-800 text-xs font-medium flex items-center gap-2">
+            <span>⚠️</span>
+            <span class="flex-1">${state.twoFactorError}</span>
+          </div>
+        ` : ""}
+
+        ${state.twoFactorSuccess ? `
+          <div class="p-3 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-medium flex items-center gap-2">
+            <span>✓</span>
+            <span class="flex-1">${state.twoFactorSuccess}</span>
+          </div>
+        ` : ""}
+
+        ${isEnabled ? `
+          <!-- Active 2FA Screen -->
+          <div class="p-4 rounded-xl bg-emerald-50/60 border border-emerald-200 space-y-3">
+            <div class="flex items-start gap-3">
+              <span class="text-emerald-600 text-xl">🛡️</span>
+              <div>
+                <h4 class="text-xs font-bold text-emerald-950">Your account is protected by Google Authenticator 2FA</h4>
+                <p class="text-xs text-emerald-800 mt-0.5 leading-relaxed">
+                  Every sign-in requires a valid 6-digit code from Google Authenticator on your mobile device.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div class="pt-2 flex items-center justify-between">
+            <button
+              type="button"
+              onclick="handleDisableTwoFactor()"
+              class="py-2 px-3.5 rounded-lg border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 font-semibold text-xs transition-colors cursor-pointer"
+            >
+              Disable Google Authenticator
+            </button>
+            <button
+              type="button"
+              onclick="closeTwoFactorModal()"
+              class="py-2 px-4 rounded-lg bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs transition-colors cursor-pointer"
+            >
+              Done
+            </button>
+          </div>
+        ` : `
+          <!-- Setup 2FA Screen -->
+          <div class="space-y-4">
+            <div class="text-xs text-slate-600 space-y-1">
+              <p><strong>Step 1:</strong> Open <strong>Google Authenticator</strong> on your phone (iOS or Android) and tap <strong>+</strong> then <strong>Scan a QR code</strong>.</p>
+            </div>
+
+            <!-- QR Code Card -->
+            <div class="flex flex-col items-center justify-center p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
+              ${state.twoFactorSetupData ? `
+                <div
+                  class="twofactor-qr-target p-2 bg-white rounded-lg shadow-2xs border border-slate-200 flex items-center justify-center min-w-[176px] min-h-[176px]"
+                  data-uri="${state.twoFactorSetupData.uri}"
+                ></div>
+                <div class="text-center w-full">
+                  <span class="text-[10px] uppercase font-bold text-slate-400 block mb-1">Or enter secret key manually:</span>
+                  <div class="flex items-center justify-center gap-2">
+                    <code class="px-2.5 py-1 bg-white border border-slate-200 rounded font-mono text-xs font-bold text-slate-800 tracking-wider">
+                      ${state.twoFactorSetupData.secret}
+                    </code>
+                    <button
+                      type="button"
+                      onclick="copyTotpSecret('${state.twoFactorSetupData.secret}')"
+                      class="px-2 py-1 rounded bg-white hover:bg-slate-100 border border-slate-200 text-slate-600 text-[11px] font-medium cursor-pointer"
+                    >
+                      📋 Copy
+                    </button>
+                  </div>
+                </div>
+              ` : `
+                <div class="py-8 text-center text-xs text-slate-400">
+                  <span class="animate-spin inline-block mr-2">⏳</span> Generating secure TOTP key...
+                </div>
+              `}
+            </div>
+
+            <div class="space-y-1">
+              <p class="text-xs text-slate-600"><strong>Step 2:</strong> Enter the 6-digit verification code from Google Authenticator to confirm activation.</p>
+            </div>
+
+            <!-- Verification Input -->
+            <div class="space-y-2">
+              <div class="flex gap-2">
+                <input
+                  type="text"
+                  inputmode="numeric"
+                  maxlength="6"
+                  pattern="[0-9]{6}"
+                  placeholder="6-digit code (e.g. 123456)"
+                  value="${state.twoFactorInputCode}"
+                  oninput="state.twoFactorInputCode = this.value"
+                  id="enable-2fa-input"
+                  class="flex-1 px-3 py-2 rounded-lg border border-slate-300 font-mono text-base font-bold text-center tracking-widest focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 focus:outline-none bg-white"
+                />
+                <button
+                  type="button"
+                  onclick="handleEnableTwoFactor()"
+                  class="py-2 px-4 rounded-lg bg-orange-600 hover:bg-orange-700 text-white font-semibold text-xs transition-colors shadow-xs cursor-pointer shrink-0"
+                >
+                  Verify & Activate
+                </button>
+              </div>
+
+              ${state.twoFactorSetupData && state.twoFactorSetupData.current_code ? `
+                <div class="flex items-center justify-between text-[11px] text-slate-500 pt-1">
+                  <span>💡 Testing without smartphone?</span>
+                  <button
+                    type="button"
+                    onclick="fillSetupCode('${state.twoFactorSetupData.current_code}')"
+                    class="text-orange-700 hover:underline font-semibold cursor-pointer"
+                  >
+                    Auto-Fill Current Code (${state.twoFactorSetupData.current_code})
+                  </button>
+                </div>
+              ` : ""}
+            </div>
+          </div>
+        `}
+      </div>
+    </div>
+  `;
+}
+
 // Post-Render Logic: Leaflet Maps & Dynamic Canvas QR Codes
 function attachPostRenderLogic() {
   // Render Canvas QR codes for tickets
@@ -2335,6 +2900,23 @@ function attachPostRenderLogic() {
         colorDark: "#0f172a",
         colorLight: "#ffffff",
         correctLevel: window.QRCode.CorrectLevel.H
+      });
+    }
+  });
+
+  // Render Canvas QR codes for Google Authenticator 2FA setup
+  const totpQrTargets = document.querySelectorAll(".twofactor-qr-target");
+  totpQrTargets.forEach(el => {
+    const uri = el.getAttribute("data-uri");
+    if (uri && window.QRCode) {
+      el.innerHTML = "";
+      new window.QRCode(el, {
+        text: uri,
+        width: 160,
+        height: 160,
+        colorDark: "#0f172a",
+        colorLight: "#ffffff",
+        correctLevel: window.QRCode.CorrectLevel.M
       });
     }
   });
@@ -2504,6 +3086,54 @@ window.handleCustomGoogleSubmit = function(e) {
 
 window.triggerGoogleSignIn = function() {
   openGoogleSignInModal();
+};
+
+// Google Authenticator 2FA Global Handlers
+window.openTwoFactorModal = function() {
+  openTwoFactorModal();
+};
+
+window.closeTwoFactorModal = function() {
+  closeTwoFactorModal();
+};
+
+window.handleEnableTwoFactor = function(code) {
+  handleEnableTwoFactor(code);
+};
+
+window.handleDisableTwoFactor = function() {
+  handleDisableTwoFactor();
+};
+
+window.handleTwoFactorLoginSubmit = function(e) {
+  handleTwoFactorLoginSubmit(e);
+};
+
+window.cancelTwoFactorLogin = function() {
+  cancelTwoFactorLogin();
+};
+
+window.autoFillCurrentTotp = function() {
+  autoFillCurrentTotp();
+};
+
+window.copyTotpSecret = function(secret) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(secret).then(() => {
+      showToast("Secret key copied to clipboard!", "success");
+    }).catch(() => {
+      prompt("Copy this secret key:", secret);
+    });
+  } else {
+    prompt("Copy this secret key:", secret);
+  }
+};
+
+window.fillSetupCode = function(code) {
+  state.twoFactorInputCode = code;
+  const input = document.getElementById("enable-2fa-input");
+  if (input) input.value = code;
+  handleEnableTwoFactor(code);
 };
 
 // Initial Bootstrap on Page Load

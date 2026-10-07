@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 EventHub - Event Booking & QR Check-In Portal
-Project 08 | Industry Full-Stack Challenge
+Project 05 | Industry Full-Stack Challenge
 Run this file directly to launch the platform:
     python3 app.py
 """

@@ -34,7 +34,15 @@ from .auth import (
     get_user_from_token,
     logout_user,
     seed_default_sessions,
-    SESSIONS
+    SESSIONS,
+    generate_totp_secret,
+    get_totp_uri,
+    get_current_totp,
+    verify_totp_code,
+    get_user_2fa_status,
+    enable_user_2fa,
+    disable_user_2fa,
+    get_user_by_id
 )
 from .external import geocode_address
 from .logger import logger
@@ -227,7 +235,19 @@ class EventHubAPIHandler(SimpleHTTPRequestHandler):
                 result = geocode_address(query_str)
                 return self._send_json(result)
 
-            # 10. Fallback for undefined API GET
+            # 10. Google Authenticator 2FA Status (Protected)
+            elif path == "/api/auth/2fa/status":
+                user = self._get_current_user()
+                if not user:
+                    return self._send_error("Unauthenticated. Please log in.", 401)
+                status = get_user_2fa_status(user["id"])
+                return self._send_json({
+                    "success": True,
+                    "enabled": status["enabled"],
+                    "has_secret": bool(status["secret"])
+                })
+
+            # 11. Fallback for undefined API GET
             return self._send_error(f"Endpoint GET {path} not found", 404)
 
         except Exception as e:
@@ -254,6 +274,18 @@ class EventHubAPIHandler(SimpleHTTPRequestHandler):
                 user = authenticate_user(email, password)
                 if not user:
                     return self._send_error("Invalid email or password.", 401)
+
+                if user.get("is_2fa_enabled"):
+                    logger.info(f"[AUTH] 2FA verification required for user #{user['id']} ('{user['email']}')")
+                    return self._send_json({
+                        "success": True,
+                        "requires_2fa": True,
+                        "user_id": user["id"],
+                        "email": user["email"],
+                        "name": user["name"],
+                        "role": user["role"],
+                        "message": "Two-factor authentication required. Please enter code from Google Authenticator."
+                    })
 
                 token = create_session(user)
                 return self._send_json({
@@ -338,6 +370,18 @@ class EventHubAPIHandler(SimpleHTTPRequestHandler):
                 if not user:
                     return self._send_error("Google authentication failed. Please try again.", 500)
 
+                if user.get("is_2fa_enabled"):
+                    logger.info(f"[AUTH] Google sign-in: 2FA verification required for user #{user['id']} ('{user['email']}')")
+                    return self._send_json({
+                        "success": True,
+                        "requires_2fa": True,
+                        "user_id": user["id"],
+                        "email": user["email"],
+                        "name": user["name"],
+                        "role": user["role"],
+                        "message": "Two-factor authentication required. Please enter code from Google Authenticator."
+                    })
+
                 token = create_session(user)
                 return self._send_json({
                     "success": True,
@@ -346,7 +390,98 @@ class EventHubAPIHandler(SimpleHTTPRequestHandler):
                     "user": user
                 })
 
-            # 6. Create New Event (Protected: Organizer Only)
+            # 6. Validate 2FA Google Authenticator Code during Login
+            elif path == "/api/auth/2fa/validate-login":
+                user_id = body.get("user_id")
+                code = body.get("code")
+                if not user_id or not code:
+                    return self._send_error("User ID and 6-digit code are required.", 400)
+
+                user = get_user_by_id(int(user_id))
+                if not user or not user.get("is_2fa_enabled") or not user.get("totp_secret"):
+                    return self._send_error("Two-factor authentication is not active for this account.", 400)
+
+                if not verify_totp_code(user["totp_secret"], str(code)):
+                    logger.warning(f"[AUTH] Invalid 2FA verification code entered for user #{user_id}")
+                    return self._send_error("Invalid verification code. Please check your Google Authenticator app.", 401)
+
+                token = create_session(user)
+                logger.info(f"[AUTH] 2FA verification successful for user #{user_id} ('{user['email']}')")
+                return self._send_json({
+                    "success": True,
+                    "message": f"Welcome back, {user['name']}! Two-factor verification verified.",
+                    "token": token,
+                    "user": user
+                })
+
+            # 7. Setup Google Authenticator 2FA (Protected: Authenticated User)
+            elif path == "/api/auth/2fa/setup":
+                user = self._get_current_user()
+                if not user:
+                    return self._send_error("Unauthenticated. Please log in.", 401)
+
+                secret = generate_totp_secret()
+                uri = get_totp_uri(secret, user["email"])
+                current_code = get_current_totp(secret)
+                return self._send_json({
+                    "success": True,
+                    "secret": secret,
+                    "uri": uri,
+                    "email": user["email"],
+                    "current_code": current_code
+                })
+
+            # 8. Enable & Persist Google Authenticator 2FA (Protected: Authenticated User)
+            elif path == "/api/auth/2fa/enable":
+                user = self._get_current_user()
+                if not user:
+                    return self._send_error("Unauthenticated. Please log in.", 401)
+
+                secret = body.get("secret", "").strip()
+                code = body.get("code", "").strip()
+                if not secret or not code:
+                    return self._send_error("Secret key and 6-digit verification code are required.", 400)
+
+                if not verify_totp_code(secret, code):
+                    return self._send_error("Invalid verification code. Ensure your device time is synchronized.", 400)
+
+                enable_user_2fa(user["id"], secret)
+                user["is_2fa_enabled"] = True
+                user["totp_secret"] = secret
+                return self._send_json({
+                    "success": True,
+                    "message": "Google Authenticator two-factor authentication has been enabled successfully!"
+                })
+
+            # 9. Disable Google Authenticator 2FA (Protected: Authenticated User)
+            elif path == "/api/auth/2fa/disable":
+                user = self._get_current_user()
+                if not user:
+                    return self._send_error("Unauthenticated. Please log in.", 401)
+
+                disable_user_2fa(user["id"])
+                user["is_2fa_enabled"] = False
+                user["totp_secret"] = None
+                return self._send_json({
+                    "success": True,
+                    "message": "Google Authenticator two-factor authentication has been disabled."
+                })
+
+            # 10. Presentation Helper: Retrieve Current TOTP Code
+            elif path == "/api/auth/2fa/demo-code":
+                user_id = body.get("user_id")
+                if not user_id:
+                    return self._send_error("User ID is required.", 400)
+                user = get_user_by_id(int(user_id))
+                if not user or not user.get("totp_secret"):
+                    return self._send_error("User not found or 2FA is not active.", 404)
+                code = get_current_totp(user["totp_secret"])
+                return self._send_json({
+                    "success": True,
+                    "code": code
+                })
+
+            # 11. Create New Event (Protected: Organizer Only)
             elif path == "/api/events":
                 user = self._get_current_user()
                 if not user:

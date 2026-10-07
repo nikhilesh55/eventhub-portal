@@ -7,7 +7,7 @@
 [![Cost Posture: ₹0](https://img.shields.io/badge/budget-%E2%82%B90%20free-success.svg)](#-cost-constraints--acceptance-criteria)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
-> **Industry Full-Stack Project Challenge · Project 08 Specification**  
+> **Industry Full-Stack Project Challenge · Project 05 Specification**  
 > An end-to-end, zero-cost operational platform featuring dynamic scannable QR ticket generation, real-time entrance gate check-in, duplicate scan prevention, capacity constraints, OpenStreetMap Nominatim geocoding, and security audit observability.
 
 ---
@@ -80,7 +80,7 @@ Small-to-medium events, campus hackathons, student workshops, and technical conf
 
 ## 🗄️ 4. Database Schema & Constraints
 
-The SQLite database (`eventhub.db`) strictly implements the 5 relational tables required by the Project 08 specification:
+The SQLite database (`eventhub.db`) strictly implements the 5 relational tables required by the Project 05 specification:
 
 ```sql
 -- 1. Users Table
